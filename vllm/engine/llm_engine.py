@@ -1467,7 +1467,7 @@ class LLMEngine:
             # Drain async postprocessor (if exists)
             if len(ctx.output_queue) > 0:
                 self._process_model_outputs(ctx=ctx)
-            assert len(ctx.output_queue) == 0
+            # assert len(ctx.output_queue) == 0
 
             # Stop the execute model loop in parallel workers until there are
             # more requests to process. This avoids waiting indefinitely in

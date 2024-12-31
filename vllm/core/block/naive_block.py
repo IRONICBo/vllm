@@ -60,6 +60,9 @@ class NaiveBlockAllocator(BlockAllocator):
             # a block pool between allocators
             self._block_pool = block_pool
 
+        import sys
+        print("block pool size: ", sys.getsizeof(self._block_pool))
+
     def allocate_immutable_block(self,
                                  prev_block: Optional[Block],
                                  token_ids: List[int],
@@ -195,7 +198,7 @@ class NaiveBlockAllocator(BlockAllocator):
         given the absolute block id.
 
         Args:
-            absolute_id (int): The absolute block id for the block 
+            absolute_id (int): The absolute block id for the block
             in whole allocator.
 
         Returns:
@@ -219,7 +222,7 @@ class NaiveBlockAllocator(BlockAllocator):
             block (Block): The block to check for copy-on-write.
 
         Returns:
-            BlockId: The block index of the new block if a copy-on-write 
+            BlockId: The block index of the new block if a copy-on-write
                 operation was performed, or the original block index if
                 no copy-on-write was necessary.
         """
@@ -365,12 +368,16 @@ class NaiveBlock(Block):
 
         self._append_token_ids_no_cow(token_ids)
 
+    @property
+    def prev_token_ids(self) -> List[int]:
+        return self.prev_block.prev_token_ids + self.prev_block.token_ids
+
     def append_token_ids(self, token_ids: List[int]) -> None:
-        """Appends the given token IDs to the block and performs a 
+        """Appends the given token IDs to the block and performs a
         copy-on-write if necessary.
 
         Args:
-            token_ids (Optional[List[int]]): The token IDs to be appended 
+            token_ids (Optional[List[int]]): The token IDs to be appended
                 to the block.
         """
         self._append_token_ids_no_cow(token_ids)

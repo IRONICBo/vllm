@@ -5,6 +5,14 @@ from vllm.utils import Device
 
 BlockId = int
 
+def print_io(func):
+    def wrapper(*args, **kwargs):
+        print(f"INPUT: args={args}, kwargs={kwargs}")
+        result = func(*args, **kwargs)
+        print(f"OUTPUT: {result}")
+        return result
+    return wrapper
+
 
 class Block(ABC):
 
@@ -48,6 +56,11 @@ class Block(ABC):
     @property
     @abstractmethod
     def prev_block(self) -> Optional["Block"]:
+        pass
+
+    @property
+    @abstractmethod
+    def prev_token_ids(self) -> List[int]:
         pass
 
     @property
@@ -186,6 +199,7 @@ class BlockAllocator(ABC):
     class NoFreeBlocksError(ValueError):
         pass
 
+    @print_io
     @abstractmethod
     def find_cached_blocks_prefix(
         self,

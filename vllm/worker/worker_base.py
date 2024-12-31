@@ -34,7 +34,9 @@ class WorkerBase(ABC):
     ) -> None:
         self.vllm_config = vllm_config
         self.model_config = vllm_config.model_config
+        self.model_config.max_model_len=8
         self.cache_config = vllm_config.cache_config
+        self.cache_config.block_size = 8
         self.lora_config = vllm_config.lora_config
         self.load_config = vllm_config.load_config
         self.parallel_config = vllm_config.parallel_config
@@ -44,6 +46,9 @@ class WorkerBase(ABC):
         self.prompt_adapter_config = vllm_config.prompt_adapter_config
         self.observability_config = vllm_config.observability_config
         self.kv_transfer_config = vllm_config.kv_transfer_config
+
+        print("model_config", self.model_config)
+        print("cache_config", self.cache_config)
 
     @abstractmethod
     def init_device(self) -> None:
@@ -148,6 +153,9 @@ class WorkerInput:
     blocks_to_copy: Optional[torch.Tensor] = None
     virtual_engine: int = 0
     num_steps: int = 1
+    # Add prefill progress to WorkerInput
+    # In seq groups are list, we need to make sure this flag is only for one seq group
+    is_prefill_progress: bool = False
 
     @classmethod
     def from_broadcasted_tensor_dict(
@@ -271,6 +279,8 @@ class LocalOrDistributedWorkerBase(WorkerBase):
                 execute_model_req.virtual_engine,
                 execute_model_req.finished_requests_ids))
 
+        # print("_get_driver_input_and_broadcast model_input", model_input)
+
         kwargs = extract_previous_hidden_states(execute_model_req)
 
         if self.do_metadata_broadcast:
@@ -314,6 +324,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
     ) -> Optional[List[SamplerOutput]]:
         """Executes at least one model step on the given sequences, unless no
         sequences are provided."""
+        import time
         start_time = time.perf_counter()
 
         inputs = self.prepare_input(execute_model_req)
@@ -322,6 +333,15 @@ class LocalOrDistributedWorkerBase(WorkerBase):
 
         model_input, worker_input, kwargs = inputs
         num_steps = worker_input.num_steps
+
+        # from vllm.coordinator_queue import is_prefill_process
+        # if worker_input.is_prefill_progress and not is_prefill_process:
+        #     # Skip for this op
+        #     return None
+
+        # print("Local or Distributed Worker Base model_input:", model_input)
+        # print("Local or Distributed Worker Base worker_input:", worker_input)
+        # print("Local or Distributed Worker Base kwargs:", kwargs)
 
         self.execute_worker(worker_input)
 
@@ -340,6 +360,13 @@ class LocalOrDistributedWorkerBase(WorkerBase):
                 orig_model_execute_time = intermediate_tensors.tensors.get(
                     "model_execute_time", torch.tensor(0)).item()
 
+        # # if current is prompt, try to save kv caches
+        # if worker_input.is_prefill_progress:
+        #     start = time.time()
+        #     torch.save(self.kv_cache[worker_input.virtual_engine], f"/home/lvbo/project/vllm/kvcache_dump/kv_cache_{start}.pt")
+
+        print("Local or Distributed Worker Base, before self.model_runner.execute_model execute_model:111", model_input)
+
         output = self.model_runner.execute_model(
             model_input=model_input,
             kv_caches=self.kv_cache[worker_input.virtual_engine]
@@ -348,6 +375,95 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             num_steps=num_steps,
             **kwargs,
         )
+
+        print("Local or Distributed Worker Base, after self.model_runner.execute_model execute_model:111", model_input)
+
+        # try to calc twice
+        # output = self.model_runner.execute_model(
+        #     model_input=model_input,
+        #     kv_caches=self.kv_cache[worker_input.virtual_engine]
+        #     if self.kv_cache is not None else None,
+        #     intermediate_tensors=intermediate_tensors,
+        #     num_steps=num_steps,
+        #     **kwargs,
+        # )
+
+        # output = self.model_runner.execute_model(
+        #     model_input=model_input,
+        #     kv_caches=self.kv_cache[worker_input.virtual_engine]
+        #     if self.kv_cache is not None else None,
+        #     intermediate_tensors=intermediate_tensors,
+        #     num_steps=num_steps,
+        #     **kwargs,
+        # )
+
+        # # if current is prompt, try to save kv caches
+        # if worker_input.is_prefill_progress:
+        #     start = time.time()
+        #     torch.save(self.kv_cache[worker_input.virtual_engine], f"/home/lvbo/project/vllm/kvcache_dump/kv_cache_{start}.pt")
+
+        # try to update prefill data
+        # send signal to cpu to swap in
+        from vllm.coordinator_queue import is_prefill_process
+        # Try to update prefill kvcache
+        if not is_prefill_process and worker_input.is_prefill_progress:
+            from vllm.coordinator_queue import swap_in_produce
+            swap_in_produce(([], [9707, 11, 3555, 374, 697, 829, 304, 1614], 0))
+            time.sleep(5)
+
+        print("Local or Distributed Worker Base output execute_model:111", output)
+        # If current is prefill progress, save and dump the cache from kv_cache
+        from vllm.coordinator_queue import is_prefill_process
+        # if worker_input.is_prefill_progress and is_prefill_process:
+        # do not swap data
+        if worker_input.is_prefill_progress and is_prefill_process and False:
+            # In prefill
+            from vllm.coordinator_queue import swap_out_consume
+            import time
+            # Try to allocate a mocked
+            while True:
+                data = swap_out_consume()
+                if data is None:
+                    time.sleep(1)
+                    continue
+
+                print(f"swap_out_consume Consumed: {data}")
+                # save the swapped out cache to disk with memoryview
+                prefix_token_ids, current_token_ids, cpu_physical_id = data
+                print(f"swap_out_consume Consumed: prefix_token_ids: {prefix_token_ids} current_token_ids: {current_token_ids} cpu_physical_id: {cpu_physical_id}")
+                key = str(prefix_token_ids + current_token_ids)
+                import hashlib
+                key = hashlib.md5(key.encode()).hexdigest()
+                import threading
+                lock = threading.Lock()
+                with lock:
+                    # need to get model infos and attention layers here.
+                    for i in range(24):
+                        with open(f"/home/lvbo/project/vllm/kvcache_dump/data/cache_{key}_{i}.bin", "wb") as f:
+                            # num_blocks, self.block_size, self.num_kv_heads, self.head_size
+                            # convert data to buffer
+                            import ctypes
+                            import time
+                            start = time.time()
+                            slice = self.kv_cache[worker_input.virtual_engine][i].cpu()[:, cpu_physical_id, :]
+                            print(f"execute_model swap_out_consume slice shape: {slice.shape} max data: {slice.max()} min data: {slice.min()} slice dtype: {slice.dtype} slice: {slice}")
+                            print(f"raw execute_model swap_out_consume slice shape: {slice.shape} max data: {slice.max()} min data: {slice.min()} slice dtype: {slice.dtype} self.kv_cache[worker_input.virtual_engine][i].cpu()[:, cpu_physical_id, :]: {self.kv_cache[worker_input.virtual_engine][i][:, cpu_physical_id, :]}")
+
+                            # torch save for check
+                            torch.save(self.kv_cache[worker_input.virtual_engine][i][:, cpu_physical_id, :], f"/home/lvbo/project/vllm/kvcache_dump/check2/cache_{key}_{i}.pt")
+
+                            data_ptr = slice.data_ptr()
+                            data_size = slice.numel() * slice.element_size()
+                            buffer = (ctypes.c_char * data_size).from_address(data_ptr)
+                            raw_data = bytes(buffer)
+                            # print(f"/home/lvbo/project/vllm/kvcache_dump/data/cache_{key}_{i}.binbuffer max data: {self.cpu_cache[i][:, cpu_physical_id, :].max()} min data: {self.cpu_cache[i][:, cpu_physical_id, :].min()}")
+                            # print(f"Time to convert to buffer: {time.time() - start} shape of raw_data: {len(raw_data)}")
+                            f.write(raw_data)
+
+                    # Skip for this op
+                    break
+
+
 
         model_execute_time = time.perf_counter() - start_time
         if not get_pp_group().is_last_rank:
@@ -365,6 +481,8 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             for o in output:
                 o.model_execute_time = (orig_model_execute_time +
                                         model_execute_time)
+
+        print("Local or Distributed Worker Base output execute_model: List[SamplerOutput]: ", output)
 
         # output is List[SamplerOutput]
         return output
@@ -387,6 +505,8 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         model_input: ModelRunnerInputBase = (
             self.model_runner.prepare_model_input(
                 execute_model_req.seq_group_metadata_list))
+
+        print("_execute_model_spmd model_input", model_input)
 
         self.execute_worker(worker_input)
 
@@ -475,7 +595,7 @@ def extract_previous_hidden_states(
         data: Union[ExecuteModelRequest, Dict[str, torch.Tensor]]) -> \
             Dict[str, torch.Tensor]:
     """If data contains previous_hidden_states, extract it. This returns a dict
-    which can be used directly as additional kwargs in any following 
+    which can be used directly as additional kwargs in any following
     execute_model calls. This is used in draft models like EAGLE."""
     output = {}
 

@@ -237,6 +237,7 @@ class PagedAttention:
     ) -> None:
         src_key_cache = src_kv_cache[0]
         dst_key_cache = dst_kv_cache[0]
+        print(f"PageAttention: swap_blocks shape src_key_cache: {src_key_cache.shape} dst_key_cache: {dst_key_cache.shape}")
         ops.swap_blocks(src_key_cache, dst_key_cache, src_to_dst)
 
         src_value_cache = src_kv_cache[1]

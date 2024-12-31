@@ -1647,6 +1647,17 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         else:
             model_executable = self.model
 
+        # from vllm.coordinator_queue import is_prefill_process
+        # # if worker_input.is_prefill_progress and is_prefill_process:
+        # # do not swap data
+        # print("execute is_prefill_process", model_input.attn_metadata.prefill_metadata)
+        # # if model_input.attn_metadata.prefill_metadata is not None and is_prefill_process:
+        # #     # check queue data and swap data
+        # #     start = time.time()
+        # #     torch.save(kv_caches, f"/home/lvbo/project/vllm/kvcache_dump/kv_cache_{start}.pt")
+
+        # # skip model forward
+
         # Receive KV cache in distributed KV cache transfer setting
         # In disagg prefill setting, it will also recv hidden states and bypass
         # model forwarding
@@ -1664,6 +1675,30 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                     model_input,
                     kv_caches=kv_caches
                 )
+
+        from vllm.coordinator_queue import is_prefill_process
+        # if worker_input.is_prefill_progress and is_prefill_process:
+        # do not swap data
+        print("execute is_prefill_process", model_input.attn_metadata.prefill_metadata)
+        # if model_input.attn_metadata.prefill_metadata is not None and is_prefill_process:
+        #     # check queue data and swap data
+        #     start = time.time()
+        #     torch.save(kv_caches, f"/home/lvbo/project/vllm/kvcache_dump/kv_cache_{start}.pt")
+
+        # skip model forward
+        # need_save_hid = False
+        # if self.need_save_datenlord(model_input, kv_caches):
+        #     print("need_save_datenlord is True")
+        #     # bypass_model_exec = True
+        #     need_save_hid = True
+
+        # if self.need_load_datenlord(model_input, kv_caches):
+        #     # load kvcache and hidden states
+        #     print("need_recv_datenlord is True")
+        #     bypass_model_exec = True
+        #     hidden_or_intermediate_states = torch.load(f"/home/lvbo/project/vllm/kvcache_dump/hidden_or_intermediate_states.pt")
+
+        print("bypass_model_exec", bypass_model_exec)
 
         multi_modal_kwargs = model_input.multi_modal_kwargs or {}
         seqlen_agnostic_kwargs = {
@@ -1688,6 +1723,11 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                     **MultiModalKwargs.as_kwargs(multi_modal_kwargs,
                                                  device=self.device),
                     **seqlen_agnostic_kwargs)
+
+                # if need_save_hid:
+                #     import time
+                #     torch.save(hidden_or_intermediate_states, f"/home/lvbo/project/vllm/kvcache_dump/hidden_or_intermediate_states_{time.time()}.pt")
+                #     # torch.save(hidden_or_intermediate_states, f"/home/lvbo/project/vllm/kvcache_dump/hidden_or_intermediate_states.pt")
 
         if (self.observability_config is not None
                 and self.observability_config.collect_model_forward_time):
@@ -1773,13 +1813,63 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
 
         return [output]
 
+    def need_save_datenlord(self, model_input, kv_caches) -> bool:
+        """Check if we need to receive kv-cache from the other worker.
+        We need to receive KV when
+            1. current vLLM instance is KV cache consumer/decode vLLM instance
+            2. this batch is not a profiling run
+            3. this batch is a prefill run
+
+        Args:
+            model_input: input to the model executable
+            kv_caches: vLLM's paged memory
+        """
+
+        from vllm.coordinator_queue import is_prefill_process
+        if not is_prefill_process:
+            return False
+
+        prefill_meta = model_input.attn_metadata.prefill_metadata
+
+        # check if the current run is profiling
+        is_profile_run = (kv_caches[0].numel() == 0)
+        # check if the current run is prefill
+        is_prefill_run = prefill_meta is not None
+
+        return is_prefill_process and (
+            not is_profile_run) and is_prefill_run
+
+    def need_load_datenlord(self, model_input, kv_caches) -> bool:
+        """Check if we need to receive kv-cache from the other worker.
+        We need to receive KV when
+            1. current vLLM instance is KV cache consumer/decode vLLM instance
+            2. this batch is not a profiling run
+            3. this batch is a prefill run
+
+        Args:
+            model_input: input to the model executable
+            kv_caches: vLLM's paged memory
+        """
+
+        from vllm.coordinator_queue import is_prefill_process
+
+        prefill_meta = model_input.attn_metadata.prefill_metadata
+
+        # check if the current run is profiling
+        is_profile_run = (kv_caches[0].numel() == 0)
+        # check if the current run is prefill
+        is_prefill_run = prefill_meta is not None
+
+        return not is_prefill_process and (
+            not is_profile_run) and is_prefill_run
+
     def need_recv_kv(self, model_input, kv_caches) -> bool:
         """Check if we need to receive kv-cache from the other worker.
         We need to receive KV when
             1. current vLLM instance is KV cache consumer/decode vLLM instance
             2. this batch is not a profiling run
             3. this batch is a prefill run
-            
+
         Args:
             model_input: input to the model executable
             kv_caches: vLLM's paged memory
@@ -1804,7 +1894,7 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             1. current vLLM instance is KV cache producer/prefill vLLM instance
             2. this batch is not a profiling run
             3. this batch is a prefill run
-            
+
         Args:
             model_input: input to the model executable
             kv_caches: vLLM's paged memory

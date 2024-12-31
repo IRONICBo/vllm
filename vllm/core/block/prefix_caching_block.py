@@ -1,7 +1,10 @@
 """Token blocks."""
+from functools import wraps
+
 import sys
 from bisect import bisect_left
 from os.path import commonprefix
+import traceback
 from typing import (Callable, Dict, FrozenSet, Iterable, List, Optional, Set,
                     Tuple)
 
@@ -16,11 +19,39 @@ from vllm.sequence import Sequence
 
 PrefixHash = int
 
+# PrefixTokenIds is a tuple of token ids that are used as a prefix for the
+PrefixTokenIds = Tuple[int, ...]
+
 # By default, we init our block access time as _DEFAULT_LAST_ACCESSED_TIME
 # so that if we find one block is still hold _DEFAULT_LAST_ACCESSED_TIME,
 # then we know this block hasn't been accessed yet.
 _DEFAULT_LAST_ACCESSED_TIME = -1
 
+def print_io(func):
+    def wrapper(*args, **kwargs):
+        print(f"INPUT: args={args}, kwargs={kwargs}")
+        result = func(*args, **kwargs)
+        print(f"OUTPUT: {result}")
+        return result
+    return wrapper
+
+
+def print_call_stack(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        print(f"call {func.__qualname__}")
+        traceback.print_stack()
+        return func(*args, **kwargs)
+    return wrapper
+
+def wrap_all_methods(cls):
+    for attr_name in dir(cls):
+        if callable(getattr(cls, attr_name)) and not attr_name.startswith("__"):
+            # add callable data
+            original_method = getattr(cls, attr_name)
+            wrapped_method = print_call_stack(original_method)
+            setattr(cls, attr_name, wrapped_method)
+    return cls
 
 class BlockTracker:
     """Used to track the status of a block inside the prefix caching allocator
@@ -46,6 +77,7 @@ class BlockTracker:
         self.reset()
 
 
+# @wrap_all_methods
 class PrefixCachingBlockAllocator(BlockAllocator):
     """A block allocator that implements prefix caching.
 
@@ -65,17 +97,25 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         self,
         num_blocks: int,
         block_size: int,
+        # provided mem block for allocator, block id is fixed!!!
         block_ids: Optional[Iterable[int]] = None,
         eviction_policy: EvictionPolicy = EvictionPolicy.LRU,
+        device: Optional[Device] = None,
     ):
+        print("PrefixCachingBlockAllocator num_blocks: {}, block_size: {}, block_ids size: {}, eviction_policy: {}".format(
+            num_blocks, block_size, len(block_ids), eviction_policy))
         if block_ids is None:
             block_ids = range(num_blocks)
 
         self._block_size = block_size
+        self._device = device
 
         # A mapping of prefix hash to block index. All blocks which have a
         # prefix hash will be in this dict, even if they have refcount 0.
         self._cached_blocks: Dict[PrefixHash, BlockId] = {}
+
+        # A mapping of prefix hash to token ids. This is used to store the
+        # self._raw_cached_blocks: Dict[PrefixHash, PrefixTokenIds] = {}
 
         # A list of immutable block IDs that have been touched by scheduler
         # and should be marked as computed after an entire batch of sequences
@@ -139,6 +179,7 @@ class PrefixCachingBlockAllocator(BlockAllocator):
             computed=computed,
         )
 
+    # @print_io
     def allocate_immutable_block(self,
                                  prev_block: Optional[Block],
                                  token_ids: List[int],
@@ -156,6 +197,8 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         assert device is None
         assert_prefix_caching_block_or_none(prev_block)
 
+        print(f"{self._device} allocate_immutable_block prev_block: {prev_block}) token_ids: {token_ids})")
+
         # First, try to create a block that points to cached data
         block = self._block_pool.init_block(prev_block=prev_block,
                                             token_ids=token_ids,
@@ -165,12 +208,71 @@ class PrefixCachingBlockAllocator(BlockAllocator):
 
         cached_block_id = self._cached_blocks.get(block.content_hash, None)
         if cached_block_id is not None:
+            # from vllm.coordinator_queue import swap_in_produce
+            # # Try to allocate a mocked
+            # swap_in_produce((block.prev_token_ids, token_ids, cached_block_id))
+            print(f"{self._device} allocate_immutable_block block_id hitted: {cached_block_id})")
             self.metric_data.query(hit=True)
             block.block_id = cached_block_id
             self._incr_refcount_cached_block(block)
             return block
+
+        # If current is prefill, try to swap out to local file
+        from vllm.coordinator_queue import is_prefill_process, swap_out_produce
+        if self._device == Device.GPU and is_prefill_process:
+            print(f"allocate_immutable_block swap_out_produce current process is prefill")
+            key = str(block.prev_token_ids + token_ids)
+            import hashlib
+            key = hashlib.md5(key.encode()).hexdigest()
+            print(f"allocate_immutable_block swap_out_produce key: {key}")
+            swap_out_produce((block.prev_token_ids, token_ids, 0))
+            print(f"allocate_immutable_block swap_out_produce done with prefix_token_ids: {block.prev_token_ids}, token_ids: {token_ids}, block_id: {block.block_id}")
+
+        # check the cache is exist in file or not
+        # if not, we need to swap in from cpu
+        # /home/lvbo/project/vllm/kvcache_dump/data/cache_{key}_{i}.bin"
+        from vllm.coordinator_queue import datenlord_flag
+        if self._device == Device.GPU and datenlord_flag:
+            prefix_token_ids, current_token_ids = block.prev_token_ids, block.token_ids
+            key = str(prefix_token_ids + current_token_ids)
+            import hashlib
+            key = hashlib.md5(key.encode()).hexdigest()
+            print(f"check remote block key: {key}")
+            # check file exist or not
+            import os
+            filename = f"/home/lvbo/project/vllm/kvcache_dump/data/cache_{key}_1.bin"
+            if os.path.exists(filename):
+                print(f"allocate_immutable_block check remote block hit file {filename} exists")
+                block_id = self._allocate_block_id()
+                print(f"{self._device} allocate_immutable_block in file block_id: {block_id})")
+                block.block_id = block_id
+                self.metric_data.query(hit=True)
+                self._cached_blocks[block.content_hash] = block_id
+                self._incr_refcount_cached_block(block)
+
+                # send signal to cpu to swap in
+                from vllm.coordinator_queue import swap_in_produce
+                swap_in_produce((block.prev_token_ids, block.token_ids, block_id))
+
+                # wait for cpu to swap in done
+                import time
+                from vllm.coordinator_queue import swap_in_done_consume
+                while True:
+                    data = swap_in_done_consume()
+                    if data is None:
+                        time.sleep(1)
+                        continue
+
+                    prefix_token_ids, current_token_ids, data_block_id = data
+                    print(f"allocate_immutable_block swap_in_done_consume Consumed: {data}")
+                    if data_block_id == block_id:
+                        break
+
+            return block
+
         self.metric_data.query(hit=False)
         self._block_pool.free_block(block)
+
 
         # No cached block => Allocate a new block
         block = self.allocate_mutable_block(prev_block)
@@ -207,6 +309,7 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         assert_prefix_caching_block_or_none(prev_block)
 
         block_id = self._allocate_block_id()
+        print(f"{self._device} allocate_mutable_block block_id: {block_id})")
         block = self._block_pool.init_block(prev_block=prev_block,
                                             token_ids=[],
                                             block_size=self._block_size,
@@ -317,6 +420,8 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         assert _block_id == block_id
 
         self._cached_blocks.pop(content_hash_to_evict)
+        # ununsed
+        # self._raw_cached_blocks.pop(content_hash_to_evict)
 
         self._refcounter.incr(block_id)
         self._track_block_id(block_id, computed=False)
@@ -324,10 +429,10 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         return block_id
 
     def _free_block_id(self, block: Block) -> None:
-        """Decrements the refcount of the block. The block may be in two 
-        possible states: (1) immutable/cached or (2) mutable/hashless. 
+        """Decrements the refcount of the block. The block may be in two
+        possible states: (1) immutable/cached or (2) mutable/hashless.
         In the first case, the refcount is decremented directly and the block
-        may be possibly added to the evictor. In other case, hashless 
+        may be possibly added to the evictor. In other case, hashless
         allocator free(..) with keep_block_object=True is called to only free
         the block id (since the block object may be reused by the caller)
         """
@@ -404,7 +509,7 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         given the absolute block id.
 
         Args:
-            absolute_id (int): The absolute block id for the block 
+            absolute_id (int): The absolute block id for the block
                 in whole allocator.
 
         Returns:
@@ -453,6 +558,8 @@ class PrefixCachingBlockAllocator(BlockAllocator):
             # Mark this block as touched so that it can be marked as
             # computed after the entire batch of sequences are scheduled.
             self._touched_blocks.add(block.block_id)
+            print("promote_to_immutable_block block_id: {}, content_hash: {}, touched_blocks: {}".format(
+                block.block_id, block.content_hash, self._touched_blocks))
             return block.block_id
 
         # Reuse the cached content hash
@@ -474,7 +581,7 @@ class PrefixCachingBlockAllocator(BlockAllocator):
             block (Block): The block to check for copy-on-write.
 
         Returns:
-            BlockId: The block index of the new block if a copy-on-write 
+            BlockId: The block index of the new block if a copy-on-write
                 operation was performed, or the original block index if
                 no copy-on-write was necessary.
         """
@@ -584,23 +691,32 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         return num_touched_blocks
 
     def swap_out(self, blocks: List[Block]) -> None:
-        """Execute the swap out actions. Basically just free the 
+        """Execute the swap out actions. Basically just free the
         given blocks.
 
         Args:
             blocks: List of blocks to be swapped out.
         """
+        # cpu might not swap out the block, so we can assume this function
+        # is called by GPU
+        # from vllm.coordinator_queue import swap_out_produce
         for block in blocks:
+            # if self._device == Device.GPU:
+            #     print(f"{self._device} swap out with {(block.prev_token_ids, block.token_ids, block.block_id)}")
+            #     swap_out_produce((block.prev_token_ids, block.token_ids, block.block_id))
             self._free_block_id(block)
 
+
     def swap_in(self, blocks: List[Block]) -> None:
-        """Execute the swap in actions. Change the block id from 
-        old allocator to current allocator for each block to finish 
-        the block table update. 
+        """Execute the swap in actions. Change the block id from
+        old allocator to current allocator for each block to finish
+        the block table update.
 
         Args:
             blocks: List of blocks to be swapped in.
         """
+        # import traceback
+        # traceback.print_stack()
         for block in blocks:
             # Here we allocate either immutable or mutable block and then
             # extract its block_id. Note that the block object is released
@@ -619,6 +735,7 @@ class PrefixCachingBlockAllocator(BlockAllocator):
 
             block.block_id = block_id  # Assign block_id
 
+    # @print_io
     def find_cached_blocks_prefix(self, block_hashes: List[int]) -> List[int]:
         """
         Given a list of block hashes, return the prefix of the block hashes that
@@ -635,11 +752,38 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         Returns:
             List[int]: The prefix of the `block_hashes` that are cached.
         """
-
+        # import traceback
+        # traceback.print_stack()
         def _block_is_cached(block_hash: PrefixHash) -> bool:
+            print(f"find_cached_blocks_prefix _block_is_cached find block_hash: {block_hash}")
             if block_hash not in self._cached_blocks:
+
+                from vllm.coordinator_queue import datenlord_flag
+                # if we want to swap in from cpu, we need to check the local file
+                if datenlord_flag:
+                    # check local file is existed
+                    # if hit, we need to swap in from cpu
+                    from vllm.coordinator_queue import get_global_prefix_hash_to_prefix_token_ids
+                    total_prefix_token_ids = get_global_prefix_hash_to_prefix_token_ids(block_hash)
+                    print(f"find_cached_blocks_prefix _block_is_cached find block_hash: {block_hash}, prefix_token_ids: {total_prefix_token_ids}")
+
+                    # find in local file
+                    if total_prefix_token_ids is not None and self._device == Device.GPU:
+                        key = str(total_prefix_token_ids)
+                        import hashlib
+                        key = hashlib.md5(key.encode()).hexdigest()
+                        print(f"find_cached_blocks_prefix _block_is_cached check remote block key: {key} raw key: {total_prefix_token_ids}")
+                        # check file exist or not
+                        import os
+                        filename = f"/home/lvbo/project/vllm/kvcache_dump/data/cache_{key}_1.bin"
+                        if os.path.exists(filename):
+                            print(f"find_cached_blocks_prefix _block_is_cached check remote block hit file {filename} exists")
+                            # try to set true and load data from prefix caching
+                            return True
+
                 return False
 
+            print(f"find_cached_blocks_prefix _block_is_cached is found find block_hash: {block_hash}, cached_blocks: {self._cached_blocks}")
             cached_block_id = self._cached_blocks[block_hash]
             # We only consider the blocks that are marked as computed.
             return self.block_is_computed(cached_block_id)
@@ -653,11 +797,14 @@ class PrefixCachingBlockAllocator(BlockAllocator):
             else:
                 return bisect_left(a, x, key=key)
 
+        print(f"{self._device} find_cached_blocks_prefix start... block_hashes: {block_hashes}")
         # Look for the first block that's not cached, and returns the prefix
         # i.e. blocks that are cached.
         idx = _bisect_left(block_hashes,
                            True,
                            key=lambda x: not _block_is_cached(x))
+
+        print(f"{self._device} find_cached_blocks_prefix done... block_hashes: {block_hashes}, idx: {idx}")
         return block_hashes[:idx]
 
 
@@ -681,6 +828,7 @@ class PrefixCachingBlock(Block):
             of this block. Defaults to None.
     """
 
+    # @print_io
     def __init__(
         self,
         prev_block: Optional[Block],
@@ -702,6 +850,7 @@ class PrefixCachingBlock(Block):
         self._allocator = allocator
         self._last_accessed: float = _DEFAULT_LAST_ACCESSED_TIME
         self._computed = computed
+        self._prev_token_ids: List[int] = prev_block.prev_token_ids if prev_block else [] + prev_block.token_ids if prev_block else []
 
         # On the first time, we create the block object, and next we only
         # reinitialize it
@@ -720,6 +869,10 @@ class PrefixCachingBlock(Block):
                                      allocator=self._allocator)
 
         self._update_num_tokens_total()
+
+    @property
+    def prev_token_ids(self) -> List[int]:
+        return self._prev_token_ids
 
     def _update_num_tokens_total(self):
         """Incrementally computes the number of tokens that there is
@@ -752,6 +905,7 @@ class PrefixCachingBlock(Block):
     def last_accessed(self, last_accessed_ts: float):
         self._last_accessed = last_accessed_ts
 
+    # @print_io
     def append_token_ids(self, token_ids: List[int]) -> None:
         """Appends the given token IDs to the block and registers the block as
         immutable if the block becomes full.
@@ -759,6 +913,9 @@ class PrefixCachingBlock(Block):
         Args:
             token_ids (List[int]): The token IDs to be appended to the block.
         """
+        # import traceback
+        # traceback.print_stack()
+
         # Ensure this is mutable block (not promoted)
         assert self.content_hash is None
         assert not self.computed
@@ -781,6 +938,10 @@ class PrefixCachingBlock(Block):
 
     @property
     def block_id(self) -> Optional[int]:
+        import traceback
+        with open("stack_trace.txt", "a") as f:
+            traceback.print_stack(file=f)
+        # traceback.print_stack()
         return self._block.block_id
 
     @block_id.setter
@@ -837,6 +998,11 @@ class PrefixCachingBlock(Block):
         # Return no hash in this case.
         if prev_block_hash is None and not is_first_block:
             return None
+
+        self._prev_token_ids = [] if is_first_block else self._prev_block.prev_token_ids + self._prev_block.token_ids
+        print("PrefixCachingBlock self._prev_token_ids: ", self._prev_token_ids)
+        print("PrefixCachingBlock self.prev_block_hash: ", prev_block_hash)
+        print("PrefixCachingBlock self._prev_block: ", self._prev_block)
 
         self._cached_content_hash = PrefixCachingBlock.hash_block_tokens(
             is_first_block,
@@ -945,11 +1111,21 @@ class ComputedBlocksTracker:
             block_hashes_recorded.append(block_hash)
             prev_block_hash = block_hash
 
+            from vllm.coordinator_queue import put_global_prefix_hash_to_prefix_token_ids
+            current_all_block_tokens = token_ids[:(i + 1) * self._block_size]
+            put_global_prefix_hash_to_prefix_token_ids(block_hash, current_all_block_tokens)
+            print(f"ComputedBlocksTracker _update_seq_hashes block_hash: {block_hash}, current_all_block_tokens: {current_all_block_tokens}")
+
         self._seq_id_to_blocks_hashes[seq.seq_id] = block_hashes_recorded
+        print(f"ComputedBlocksTracker _update_seq_hashes seq_id: {seq.seq_id}, block_hashes_recorded: {block_hashes_recorded}")
+        # self._seq_id_to_blocks_hashes[seq.seq_id] = block_hashes_recorded
 
     def get_num_cached_tokens(self, seq: Sequence) -> int:
         if not self._enable_caching:
             return 0
+
+        token_ids = seq.get_token_ids()
+        print(f"ComputedBlocksTracker get_num_cached_tokens seq_id: {seq.seq_id}, token_ids: {token_ids}")
 
         # We always try to update the sequence hashes on the fly.
         # This is to ensure that we don't miss any cached tokens for the

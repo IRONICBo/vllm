@@ -10,7 +10,7 @@ class BlockTable:
     """A class to manage blocks for a specific sequence.
 
     The BlockTable maps a sequence of tokens to a list of blocks, where each
-    block represents a contiguous memory allocation for a portion of the 
+    block represents a contiguous memory allocation for a portion of the
     sequence. The blocks are managed by a DeviceAwareBlockAllocator, which is
     responsible for allocating and freeing memory for the blocks.
 
@@ -100,7 +100,7 @@ class BlockTable:
         self._num_full_slots = len(token_ids)
 
     def update(self, blocks: List[Block]) -> None:
-        """Resets the table to the newly provided blocks 
+        """Resets the table to the newly provided blocks
         (with their corresponding block ids)
         """
         self._blocks.update(blocks)
@@ -263,6 +263,8 @@ class BlockTable:
                                        token_ids: List[int],
                                        device: Device) -> List[Block]:
         blocks: List[Block] = []
+
+        print(f"_allocate_blocks_for_token_ids {device} prev_block: {prev_block} token_ids: {token_ids}")
 
         block_token_ids = []
         tail_token_ids = []

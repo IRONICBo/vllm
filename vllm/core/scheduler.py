@@ -532,7 +532,7 @@ class Scheduler:
                 chunked number of tokens are scheduled  if
                 `budget.num_batched_tokens` has not enough capacity to schedule
                 all tokens.
-    
+
         Returns:
             SchedulerRunningOutputs.
         """
@@ -1045,7 +1045,7 @@ class Scheduler:
 
     def _schedule_default(self) -> SchedulerOutputs:
         """Schedule queued requests.
-        
+
         The current policy is designed to optimize the throughput. First,
         it batches as many prefill requests as possible. And it schedules
         decodes. If there's a pressure on GPU memory, decode requests can
@@ -1150,7 +1150,7 @@ class Scheduler:
 
     def _schedule_chunked_prefill(self) -> SchedulerOutputs:
         """Schedule queued requests.
-        
+
         Chunked prefill allows to chunk prefill requests, batch them together
         with decode requests. This policy 1. schedule as many decoding requests
         as possible. 2. schedule chunked prefill requests that are not
@@ -1542,14 +1542,14 @@ class Scheduler:
         # sequences. This may require a more sophisticated CUDA kernel.
         if self.user_specified_preemption_mode is None:
             if seq_group.get_max_num_running_seqs() == 1:
-                preemption_mode = PreemptionMode.RECOMPUTE
+                preemption_mode = PreemptionMode.SWAP
             else:
                 preemption_mode = PreemptionMode.SWAP
 
         elif self.user_specified_preemption_mode == "swap":
             preemption_mode = PreemptionMode.SWAP
         else:
-            preemption_mode = PreemptionMode.RECOMPUTE
+            preemption_mode = PreemptionMode.SWAP
 
         if self.num_cumulative_preemption % 50 == 0:
             logger.warning(

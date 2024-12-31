@@ -105,6 +105,8 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
         self._last_access_blocks_tracker = LastAccessBlocksTracker(
             self.block_allocator)
 
+        print("SelfAttnBlockSpaceManager initialized with self: ", self.__dict__)
+
     def can_allocate(self,
                      seq_group: SequenceGroup,
                      num_lookahead_slots: int = 0) -> AllocStatus:
@@ -336,12 +338,12 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
 
     def can_swap_in(self, seq_group: SequenceGroup,
                     num_lookahead_slots: int) -> AllocStatus:
-        """Returns the AllocStatus for the given sequence_group 
+        """Returns the AllocStatus for the given sequence_group
         with num_lookahead_slots.
 
         Args:
             sequence_group (SequenceGroup): The sequence group to swap in.
-            num_lookahead_slots (int): Number of lookahead slots used in 
+            num_lookahead_slots (int): Number of lookahead slots used in
                 speculative decoding, default to 0.
 
         Returns:
@@ -358,7 +360,7 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
             seq_group (SequenceGroup): The sequence group to swap in.
 
         Returns:
-            List[Tuple[int, int]]: The mapping of swapping block from CPU 
+            List[Tuple[int, int]]: The mapping of swapping block from CPU
                 to GPU.
         """
         physical_block_id_mapping = []
@@ -388,12 +390,12 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
         return physical_block_id_mapping
 
     def can_swap_out(self, seq_group: SequenceGroup) -> bool:
-        """Returns whether we can swap out the given sequence_group 
+        """Returns whether we can swap out the given sequence_group
         with num_lookahead_slots.
 
         Args:
             seq_group (SequenceGroup): The sequence group to swap out.
-            num_lookahead_slots (int): Number of lookahead slots used in 
+            num_lookahead_slots (int): Number of lookahead slots used in
                 speculative decoding, default to 0.
 
         Returns:
@@ -411,7 +413,7 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
             sequence_group (SequenceGroup): The sequence group to swap out.
 
         Returns:
-            List[Tuple[int, int]]: The mapping of swapping block from 
+            List[Tuple[int, int]]: The mapping of swapping block from
                 GPU to CPU.
         """
         physical_block_id_mapping = []
@@ -454,7 +456,7 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
                   device: Device,
                   status: SequenceStatus,
                   num_lookahead_slots: int = 0) -> AllocStatus:
-        """Returns the AllocStatus for swapping in/out the given sequence_group 
+        """Returns the AllocStatus for swapping in/out the given sequence_group
         on to the 'device'.
 
         Args:
@@ -462,11 +464,11 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
             device (Device): device to swap the 'seq_group' on.
             status (SequenceStatus): The status of sequence which is needed
                 for action. RUNNING for swap out and SWAPPED for swap in
-            num_lookahead_slots (int): Number of lookahead slots used in 
+            num_lookahead_slots (int): Number of lookahead slots used in
                 speculative decoding, default to 0.
 
         Returns:
-            AllocStatus: The AllocStatus for swapping in/out the given 
+            AllocStatus: The AllocStatus for swapping in/out the given
                 sequence_group on to the 'device'.
         """
         # First determine the number of blocks that will be touched by this

@@ -147,8 +147,8 @@ class ModelConfig:
             HuggingFace config.
         mm_processor_kwargs: Arguments to be forwarded to the model's processor
             for multi-modal data, e.g., image processor.
-        mm_cache_preprocessor: If true, then enables caching of the multi-modal 
-            preprocessor/mapper. Otherwise, the mapper executes each time, and 
+        mm_cache_preprocessor: If true, then enables caching of the multi-modal
+            preprocessor/mapper. Otherwise, the mapper executes each time, and
             for better performance consider enabling frontend process.
         override_neuron_config: Initialize non default neuron config or
             override default neuron config that are specific to Neuron devices,
@@ -840,7 +840,10 @@ class CacheConfig:
         cpu_offload_gb: float = 0,
     ) -> None:
         self.block_size = block_size
-        self.gpu_memory_utilization = gpu_memory_utilization
+        # self.gpu_memory_utilization = gpu_memory_utilization
+        # set small gpu_memory_utilization to avoid OOM
+        self.gpu_memory_utilization = 0.08
+        swap_space = 1
         self.swap_space_bytes = swap_space * GiB_bytes
         self.num_gpu_blocks_override = num_gpu_blocks_override
         self.cache_dtype = cache_dtype

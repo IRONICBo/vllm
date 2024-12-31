@@ -275,6 +275,7 @@ class Worker(LocalOrDistributedWorkerBase):
 
         This also warms up the model, which may record CUDA graphs.
         """
+        num_gpu_blocks = 16
         raise_if_cache_size_invalid(num_gpu_blocks,
                                     self.cache_config.block_size,
                                     self.cache_config.is_attention_free,
@@ -316,6 +317,7 @@ class Worker(LocalOrDistributedWorkerBase):
     @torch.inference_mode()
     def prepare_worker_input(
             self, execute_model_req: ExecuteModelRequest) -> WorkerInput:
+        print("worker prepare_worker_input execute_model_req: ", execute_model_req)
         virtual_engine = execute_model_req.virtual_engine
         num_steps = execute_model_req.num_steps
         num_seq_groups = len(execute_model_req.seq_group_metadata_list)
@@ -341,6 +343,7 @@ class Worker(LocalOrDistributedWorkerBase):
             blocks_to_copy=blocks_to_copy,
             virtual_engine=virtual_engine,
             num_steps=num_steps,
+            is_prefill_progress=execute_model_req.seq_group_metadata_list[0].is_prompt,
         )
 
     @torch.inference_mode()
