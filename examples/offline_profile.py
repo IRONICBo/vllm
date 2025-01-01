@@ -1,6 +1,8 @@
+from contextlib import contextmanager
 import inspect
 import json
 import os
+import time
 import sys
 from argparse import RawTextHelpFormatter
 from dataclasses import asdict, dataclass
@@ -10,12 +12,25 @@ import torch
 
 from vllm import LLM, SamplingParams
 from vllm.engine.arg_utils import EngineArgs
-from vllm.profiler import layerwise_profile
-from vllm.utils import FlexibleArgumentParser
+from argparse import ArgumentParser
 
 BATCH_SIZE_DEFAULT = 1
-PROMPT_LEN_DEFAULT = 256
-OUTPUT_LEN_DEFAULT = 2
+PROMPT_LEN_DEFAULT = 25600
+OUTPUT_LEN_DEFAULT = 10
+MAX_NUM_BATCHED_TOKENS_DEFAULT = 131072
+
+class LatencyContext:
+    def __init__(self):
+        self.start_time = None
+        self.cost_time = None
+
+    def __enter__(self):
+        self.start_time = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        end_time = time.perf_counter()
+        self.cost_time = end_time - self.start_time
 
 
 @dataclass
@@ -24,7 +39,6 @@ class ProfileContext:
     prompt_len: int
     output_len: int
     batch_size: int
-    save_chrome_traces_folder: Optional[str]
 
 
 def get_dtype(dtype: str):
@@ -34,7 +48,7 @@ def get_dtype(dtype: str):
         return dtype
 
 
-def run_profile(context: ProfileContext, csv_output: Optional[str],
+def run_profile(context: ProfileContext,
                 json_output: Optional[str]):
     print("Run profile with:")
     for key, value in asdict(context).items():
@@ -84,7 +98,8 @@ def run_profile(context: ProfileContext, csv_output: Optional[str],
     def add_requests():
         for i in range(batch_size):
             prompt_token_ids = torch.randint(
-                llm.llm_engine.model_config.get_vocab_size(),
+                # llm.llm_engine.model_config.get_vocab_size(),
+                100000,
                 size=(prompt_len, )).tolist()
 
             llm.llm_engine.add_request(
@@ -99,24 +114,29 @@ def run_profile(context: ProfileContext, csv_output: Optional[str],
     # Warm up run
     print("Warm up run ...")
     add_requests()
-    llm.llm_engine.step()  # Prefill
-    llm.llm_engine.step()  # Decode
+    with LatencyContext() as latency_context:
+        llm.llm_engine.step()  # Prefill
+    print(f"warm up Prefill cost time {latency_context.cost_time}")
+
+    with LatencyContext() as latency_context:
+       llm.llm_engine.step()  # Decode
+    print(f"warm up Decode cost time {latency_context.cost_time}")
     abort_requests()
 
     print("Profile run ...")
     add_requests()
 
-    with layerwise_profile() as prefill_prof:
+    with LatencyContext() as prefill_prof:
         llm.llm_engine.step()  # First step is prefill
 
     decode_profs = []
     for x in range(args.output_len - 1):
-        with layerwise_profile() as decode_prof:
+        with LatencyContext() as decode_prof:
             llm.llm_engine.step()
-        decode_profs.append(decode_prof)
+            decode_profs.append(decode_prof)
 
-    decode_results_list = [prof.results for prof in decode_profs]
-    prefill_results = prefill_prof.results
+    decode_results_list = [prof.cost_time for prof in decode_profs]
+    prefill_results = prefill_prof.cost_time
     has_decode = len(decode_results_list) > 0
 
     LINE_WIDTH = 80
@@ -125,7 +145,7 @@ def run_profile(context: ProfileContext, csv_output: Optional[str],
           f"(prompt_len={prompt_len}, batch_size={batch_size})")
     print("=" * LINE_WIDTH)
     print()
-    prefill_results.print_model_table()
+    print(f"Prefill Cost Time: {prefill_results}")
 
     if has_decode:
         print()
@@ -134,37 +154,7 @@ def run_profile(context: ProfileContext, csv_output: Optional[str],
               f"(prompt_len={prompt_len}, batch_size={batch_size})")
         print("=" * LINE_WIDTH)
         print()
-        decode_results_list[0].print_model_table()
-
-    print()
-    print("=" * LINE_WIDTH)
-    print(f"= Prefill Summary Table "
-          f"(prompt_len={prompt_len}, batch_size={batch_size})")
-    print("=" * LINE_WIDTH)
-    print()
-    prefill_results.print_summary_table()
-
-    if has_decode:
-        print()
-        print("=" * LINE_WIDTH)
-        print(f"= First Decode Step Summary Table "
-              f"(prompt_len={prompt_len}, batch_size={batch_size})")
-        print("=" * LINE_WIDTH)
-        print()
-        decode_results_list[0].print_summary_table()
-
-    if csv_output:
-        csv_filename_base = csv_output.rstrip(".csv")
-        prefill_results.export_model_stats_table_csv(
-            csv_filename_base + "_prefill_model_table.csv")
-        prefill_results.export_summary_stats_table_csv(
-            csv_filename_base + "_prefill_summary_table.csv")
-
-        if has_decode:
-            decode_results_list[0].export_model_stats_table_csv(\
-                csv_filename_base + "_decode_model_table.csv")
-            decode_results_list[0].export_summary_stats_table_csv(
-                csv_filename_base + "_decode_summary_table.csv")
+        print(f"Decode Cost Time: {decode_results_list[0]}")
 
     if json_output:
         cuda_devices = [
@@ -180,33 +170,36 @@ def run_profile(context: ProfileContext, csv_output: Optional[str],
                 "cuda_devices": f"{cuda_devices}",
                 **asdict(context)
             },
-            "prefill": prefill_results.convert_stats_to_dict(),
+            "llm_engine": f"{llm.llm_engine.__dict__}",
+            "case": {
+                "prompt_len": prompt_len,
+                "output_len": output_len,
+                "batch_size": batch_size,
+            },
+            "prefill_cost": prefill_prof.cost_time,
         }
 
         if has_decode:
-            for idx, dr in enumerate(decode_results_list):
-                json_dict[f"decode_{idx + 1}"] = dr.convert_stats_to_dict()
+            for idx, dr in enumerate(decode_profs):
+                json_dict[f"decode_cost_{idx + 1}"] = dr.cost_time
 
-        for idx, dr in enumerate(decode_results_list[1:]):
-            json_dict[f"decode_{idx + 1}"] = dr.convert_stats_to_dict()
+        for idx, dr in enumerate(decode_profs[1:]):
+            json_dict[f"decode_cost_{idx + 1}"] = dr.cost_time
 
-        with open(json_output.rstrip(".json") + ".json", "w+") as f:
+
+        json_output_base_name = json_output.rstrip(".json")
+        json_output_dir = os.path.dirname(json_output)
+        if not os.path.exists(json_output_dir):
+            os.makedirs(json_output_dir)
+        json_output_path = json_output_base_name + f"_batch_size_{batch_size}_prompt_len_{prompt_len}_output_len_{output_len}_.json"
+
+        with open(json_output_path, "w+") as f:
             json.dump(json_dict, f, indent=2)
         pass
 
-    if context.save_chrome_traces_folder is not None:
-        os.makedirs(context.save_chrome_traces_folder, exist_ok=True)
-        prefill_prof.profiler.export_chrome_trace(
-            context.save_chrome_traces_folder + "/prefill.json")
-        for idx, decode_prof in enumerate(decode_profs):
-            decode_prof.profiler.export_chrome_trace(
-                context.save_chrome_traces_folder + f"/decode_{idx + 1}.json")
-        print("Traces saved as prefill.json and decode_1.json, etc."
-              f" in folder {context.save_chrome_traces_folder}")
-
 
 if __name__ == "__main__":
-    parser = FlexibleArgumentParser(description="""
+    parser = ArgumentParser(description="""
 Profile a model
 
     example:
@@ -232,24 +225,10 @@ Profile a model
 """,
                                     formatter_class=RawTextHelpFormatter)
     parser.add_argument(
-        "--csv",
-        type=str,
-        default=None,
-        help="Export the results as multiple csv file. This should be the root "
-        "filename, will create <filename>_prefill_model_table.csv, "
-        "<filename>_prefill_summary_table.csv, "
-        "<filename>_decode_model_table.csv, and "
-        "<filename>_decode_summary_table.csv")
-    parser.add_argument(
         "--json",
         type=str,
-        default=None,
+        default="benchmark",
         help="Export the results as a json file. This should be the filename")
-    parser.add_argument("--save-chrome-traces-folder",
-                        type=str,
-                        help="Save chrome traces for the prefill and decode "
-                        "will save traces as prefill.json and decode_1.json, "
-                        "etc. inside this folder")
     parser.add_argument(
         "--prompt-len",
         type=int,
@@ -265,8 +244,9 @@ Profile a model
         "--output-len",
         type=int,
         default=OUTPUT_LEN_DEFAULT,
-        help="Number of llm steps to run (includes prefill and decode) "
-        "- default={OUTPUT_LEN_DEFAULT}")
+        help=f"Number of llm steps to run (includes prefill and decode) "
+        f"- default={OUTPUT_LEN_DEFAULT}")
+
 
     EngineArgs.add_cli_args(parser)
 
@@ -279,4 +259,4 @@ Profile a model
             for k, v in vars(args).items()
             if k in inspect.signature(ProfileContext).parameters
         })
-    run_profile(context, csv_output=args.csv, json_output=args.json)
+    run_profile(context, json_output=args.json)
