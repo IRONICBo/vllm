@@ -235,14 +235,17 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         if self._device == Device.GPU and datenlord_flag:
             prefix_token_ids, current_token_ids = block.prev_token_ids, block.token_ids
             key = str(prefix_token_ids + current_token_ids)
-            import hashlib
-            key = hashlib.md5(key.encode()).hexdigest()
+            # import hashlib
+            # key = hashlib.md5(key.encode()).hexdigest()
             print(f"check remote block key: {key}")
             # check file exist or not
-            import os
-            filename = f"/home/lvbo/project/vllm/kvcache_dump/data/cache_{key}_1.bin"
-            if os.path.exists(filename):
-                print(f"allocate_immutable_block check remote block hit file {filename} exists")
+            # import os
+            # filename = f"/home/lvbo/project/vllm/kvcache_dump/data/cache_{key}_1.bin"
+
+            from vllm.coordinator_queue import sdk
+            matched_key = sdk.match_prefix_sync(key)
+            if matched_key is not None:
+                print(f"allocate_immutable_block check remote block hit file {matched_key} exists")
                 block_id = self._allocate_block_id()
                 print(f"{self._device} allocate_immutable_block in file block_id: {block_id})")
                 block.block_id = block_id
@@ -767,17 +770,17 @@ class PrefixCachingBlockAllocator(BlockAllocator):
                     total_prefix_token_ids = get_global_prefix_hash_to_prefix_token_ids(block_hash)
                     print(f"find_cached_blocks_prefix _block_is_cached find block_hash: {block_hash}, prefix_token_ids: {total_prefix_token_ids}")
 
-                    # find in local file
+                    # find in kv cache server
                     if total_prefix_token_ids is not None and self._device == Device.GPU:
-                        key = str(total_prefix_token_ids)
-                        import hashlib
-                        key = hashlib.md5(key.encode()).hexdigest()
+                        key = total_prefix_token_ids
                         print(f"find_cached_blocks_prefix _block_is_cached check remote block key: {key} raw key: {total_prefix_token_ids}")
                         # check file exist or not
-                        import os
-                        filename = f"/home/lvbo/project/vllm/kvcache_dump/data/cache_{key}_1.bin"
-                        if os.path.exists(filename):
-                            print(f"find_cached_blocks_prefix _block_is_cached check remote block hit file {filename} exists")
+                        # import os
+                        # filename = f"/home/lvbo/project/vllm/kvcache_dump/data/cache_{key}_1.bin"
+                        from vllm.coordinator_queue import sdk
+                        matched_key = sdk.match_prefix_sync(key)
+                        if matched_key is not None:
+                            print(f"find_cached_blocks_prefix _block_is_cached check remote block hit file {matched_key} exists")
                             # try to set true and load data from prefix caching
                             return True
 

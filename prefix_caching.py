@@ -98,8 +98,8 @@ prompts = []
 for i in range(1):
     # prompts.append(f"Hello, Hello, Hello, Hello,{i}")
     # prompts.append(f"Hello, What is your name in model {i}?")
-    # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello")
-    prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello")
+    prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello")
+    # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello")
     # prompts.append(f"Hello,{i}")
 
 # multi thread

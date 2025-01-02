@@ -365,7 +365,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         #     start = time.time()
         #     torch.save(self.kv_cache[worker_input.virtual_engine], f"/home/lvbo/project/vllm/kvcache_dump/kv_cache_{start}.pt")
 
-        print("Local or Distributed Worker Base, before self.model_runner.execute_model execute_model:111", model_input)
+        # print("Local or Distributed Worker Base, before self.model_runner.execute_model execute_model:111", model_input)
 
         output = self.model_runner.execute_model(
             model_input=model_input,
@@ -376,7 +376,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             **kwargs,
         )
 
-        print("Local or Distributed Worker Base, after self.model_runner.execute_model execute_model:111", model_input)
+        # print("Local or Distributed Worker Base, after self.model_runner.execute_model execute_model:111", model_input)
 
         # try to calc twice
         # output = self.model_runner.execute_model(
@@ -411,7 +411,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             swap_in_produce(([], [9707, 11, 3555, 374, 697, 829, 304, 1614], 0))
             time.sleep(5)
 
-        print("Local or Distributed Worker Base output execute_model:111", output)
+        # print("Local or Distributed Worker Base output execute_model:111", output)
         # If current is prefill progress, save and dump the cache from kv_cache
         from vllm.coordinator_queue import is_prefill_process
         # if worker_input.is_prefill_progress and is_prefill_process:
@@ -482,7 +482,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
                 o.model_execute_time = (orig_model_execute_time +
                                         model_execute_time)
 
-        print("Local or Distributed Worker Base output execute_model: List[SamplerOutput]: ", output)
+        # print("Local or Distributed Worker Base output execute_model: List[SamplerOutput]: ", output)
 
         # output is List[SamplerOutput]
         return output

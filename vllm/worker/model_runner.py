@@ -1679,7 +1679,7 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         from vllm.coordinator_queue import is_prefill_process
         # if worker_input.is_prefill_progress and is_prefill_process:
         # do not swap data
-        print("execute is_prefill_process", model_input.attn_metadata.prefill_metadata)
+        # print("execute is_prefill_process", model_input.attn_metadata.prefill_metadata)
         # if model_input.attn_metadata.prefill_metadata is not None and is_prefill_process:
         #     # check queue data and swap data
         #     start = time.time()

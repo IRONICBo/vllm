@@ -22,6 +22,15 @@ global_prefix_hash_to_prefix_token_ids: Dict[PrefixHash, PrefixTokenIds] = {}
 # prefix token ids, current token ids, cpu physical id
 DataType = Tuple[List[int], List[int], int]
 
+# datenlord kv cache client
+from datenlordsdk import DatenLordSDK
+sdk = DatenLordSDK(
+    block_size=1024*1024*2,
+    kv_engine_address=["127.0.0.1:2379"],
+    log_level="debug"
+)
+print("DatenLordSDK initialized successfully")
+
 def put_global_prefix_hash_to_prefix_token_ids(prefix_hash: PrefixHash, prefix_token_ids: PrefixTokenIds):
     """
     Append the prefix hash to prefix token ids mapping to the global mapping

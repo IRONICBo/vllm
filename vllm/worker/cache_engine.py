@@ -81,8 +81,8 @@ class CacheEngine:
         self.thread = threading.Thread(target=self.watch_and_swap_in, daemon=True)
         self.thread.start()
 
-        # self.thread2 = threading.Thread(target=self.watch_and_swap_out, daemon=True)
-        # self.thread2.start()
+        self.thread2 = threading.Thread(target=self.watch_and_swap_out, daemon=True)
+        self.thread2.start()
 
 
     def _allocate_kv_cache(
@@ -133,57 +133,71 @@ class CacheEngine:
             print(f"self.num_attention_layers: {self.num_attention_layers}")
             import threading
             lock = threading.Lock()
+
+            from vllm.coordinator_queue import sdk
+            from io import BytesIO
+            (match_key, value) = sdk.try_load_sync(key)
+            if match_key is None:
+                print(f"watch_and_swap_in: key {key} not found in datenlord")
+                continue
+
+            memoryview_value = memoryview(value)
+            memoryview_value = memoryview_value.tobytes()
+            memoryview_value = BytesIO(memoryview_value)
+            kv_cache = torch.load(memoryview_value)
+
             with lock:
                 for i in range(self.num_attention_layers):
-                    filename = f"/home/lvbo/project/vllm/kvcache_dump/data/cache_{key}_{i}.bin"
-                    with open(filename, "rb") as f:
-                        print(f"swap_in key: {key} filename: {filename}")
-                        # convert data to buffer
-                        start = time.time()
-                        # from head
-                        f.seek(0)
-                        buf = f.read()
-                        print(f"file read: {time.time() - start} shape of raw_data: {len(buf)}")
-                        # mock buffer
-                        # buf = bytes(4096)
-                        # buf = bytes(4096)
-                        # buf = bytearray([2] * 4096)
-                        print(f"Time to read from disk: {time.time() - start} shape of raw_data: {len(buf)}")
+                    # filename = f"/home/lvbo/project/vllm/kvcache_dump/data/cache_{key}_{i}.bin"
+                    # with open(filename, "rb") as f:
+                    # print(f"swap_in key: {key} filename: {filename}")
+                    # convert data to buffer
+                    start = time.time()
+                    # from head
+                    # f.seek(0)
+                    # buf = f.read()
+                    # print(f"file read: {time.time() - start} shape of raw_data: {len(buf)}")
+                    # mock buffer
+                    # buf = bytes(4096)
+                    # buf = bytes(4096)
+                    # buf = bytearray([2] * 4096)
+                    # print(f"Time to read from disk: {time.time() - start} shape of raw_data: {len(buf)}")
 
-                        kv_cache = torch.frombuffer(buf, dtype=self.dtype)
-                        # kv_cache = torch.zeros((2, 1, 1024), dtype=self.dtype)
-                        kv_cache = kv_cache.reshape((2, 1024))
-                        print(f"watch and swap in: restore kv_cache shape: {kv_cache.shape} buffer max data: {kv_cache.max()} min data: {kv_cache.min()}")
-                        # kv_cache = kv_cache.reshape(self.attn_backend.get_kv_cache_shape(
-                        #     1, self.block_size, self.num_kv_heads, self.head_size))
-                        # print(f"watch and swap in: restore kv_cache shape: {kv_cache.shape} buffer max data: {kv_cache.max()} min data: {kv_cache.min()}")
+                    # kv_cache = torch.frombuffer(buf, dtype=self.dtype)
+                    # kv_cache = torch.zeros((2, 1, 1024), dtype=self.dtype)
+                    # kv_cache = kv_cache.reshape((2, 1024))
+                    # print(f"watch and swap in: restore kv_cache shape: {kv_cache.shape} buffer max data: {kv_cache.max()} min data: {kv_cache.min()}")
+                    # kv_cache = kv_cache.reshape(self.attn_backend.get_kv_cache_shape(
+                    #     1, self.block_size, self.num_kv_heads, self.head_size))
+                    # print(f"watch and swap in: restore kv_cache shape: {kv_cache.shape} buffer max data: {kv_cache.max()} min data: {kv_cache.min()}")
 
-                        # copy data to cpu cache
-                        # choose the last block as the target block
-                        # cpu_physical_id = self.cpu_cache[i].shape[1] - 1
-                        # # cpu cache shape? 2, 1, 1024
-                        # self.cpu_cache[i][:, cpu_physical_id, :] = kv_cache[0, :, :]
-                        # # print(f"swap_in key: {key} filename: {filename} cpu_physical_id {cpu_physical_id} in cache: {self.cpu_cache[i]}")
-                        # print(f"swap_in key: {key} filename: {filename} buffer max data: {kv_cache.max()} min data: {kv_cache.min()}")
-                        # print(f"swap_in Consumed: {data} buffer max data: {kv_cache.max()} min data: {kv_cache.min()}")
+                    # copy data to cpu cache
+                    # choose the last block as the target block
+                    # cpu_physical_id = self.cpu_cache[i].shape[1] - 1
+                    # # cpu cache shape? 2, 1, 1024
+                    # self.cpu_cache[i][:, cpu_physical_id, :] = kv_cache[0, :, :]
+                    # # print(f"swap_in key: {key} filename: {filename} cpu_physical_id {cpu_physical_id} in cache: {self.cpu_cache[i]}")
+                    # print(f"swap_in key: {key} filename: {filename} buffer max data: {kv_cache.max()} min data: {kv_cache.min()}")
+                    # print(f"swap_in Consumed: {data} buffer max data: {kv_cache.max()} min data: {kv_cache.min()}")
 
-                        # Direct copy buffer to gpu kv cache
-                        self.gpu_cache[i][:, gpu_physical_id, :] = kv_cache.cuda()
-                        # kv_cache.squeeze(1).cuda() [2, 1, 1024] -> [2, 1024]
-                        # self.gpu_cache[i][:, gpu_physical_id, :] = kv_cache.squeeze(1).cuda()
-                        print(f"swap_in key: {key} filename: {filename} gpu_physical_id {gpu_physical_id} gpu cache shape: {self.gpu_cache[i].shape} in cache: {self.gpu_cache[i]}")
-                        print(f"raw swap_in key: {key} filename: {filename} gpu_physical_id {gpu_physical_id} gpu cache shape: {self.gpu_cache[i].shape} in self.gpu_cache[i][:, gpu_physical_id, :]: {self.gpu_cache[i][:, gpu_physical_id, :]}")
+                    # Direct copy buffer to gpu kv cache
+                    self.gpu_cache[i][:, gpu_physical_id, :] = kv_cache[i].cuda()
+                    print(f"swap_in key: {key} kv_cache shape: {kv_cache[i].shape} gpu_physical_id {gpu_physical_id} in cache: {self.gpu_cache[i]}")
+                    # kv_cache.squeeze(1).cuda() [2, 1, 1024] -> [2, 1024]
+                    # self.gpu_cache[i][:, gpu_physical_id, :] = kv_cache.squeeze(1).cuda()
+                    # print(f"swap_in key: {key} filename: {filename} gpu_physical_id {gpu_physical_id} gpu cache shape: {self.gpu_cache[i].shape} in cache: {self.gpu_cache[i]}")
+                    # print(f"raw swap_in key: {key} filename: {filename} gpu_physical_id {gpu_physical_id} gpu cache shape: {self.gpu_cache[i].shape} in self.gpu_cache[i][:, gpu_physical_id, :]: {self.gpu_cache[i][:, gpu_physical_id, :]}")
 
-                        # torch save for check
-                        # torch.save(self.gpu_cache[i][:, gpu_physical_id, :], f"/home/lvbo/project/vllm/kvcache_dump/check/new_cache_{key}_{i}.pt")
+                    # torch save for check
+                    # torch.save(self.gpu_cache[i][:, gpu_physical_id, :], f"/home/lvbo/project/vllm/kvcache_dump/check/new_cache_{key}_{i}.pt")
 
-                        # use check2 to check the data
-                        # kv_cache = torch.load(f"/home/lvbo/project/vllm/kvcache_dump/check2/cache_{key}_{i}.pt")
-                        print(f"from tensor: watch and swap in: restore kv_cache shape: {kv_cache.shape} buffer max data: {kv_cache.max()} min data: {kv_cache.min()}")
-                        print(f"raw swap_in key: {key} filename: {filename} gpu_physical_id {gpu_physical_id} gpu cache shape: {self.gpu_cache[i].shape} in check2: {kv_cache}")
-                        # self.gpu_cache[i][:, gpu_physical_id, :] = kv_cache
+                    # use check2 to check the data
+                    # kv_cache = torch.load(f"/home/lvbo/project/vllm/kvcache_dump/check2/cache_{key}_{i}.pt")
+                    # print(f"from tensor: watch and swap in: restore kv_cache shape: {kv_cache.shape} buffer max data: {kv_cache.max()} min data: {kv_cache.min()}")
+                    # print(f"raw swap_in key: {key} filename: {filename} gpu_physical_id {gpu_physical_id} gpu cache shape: {self.gpu_cache[i].shape} in check2: {kv_cache}")
+                    # self.gpu_cache[i][:, gpu_physical_id, :] = kv_cache
 
-                        print(f"Time to convert to buffer: {time.time() - start} shape of raw_data: {len(buf)}")
+                    print(f"Time to convert to buffer: {time.time() - start} shape of raw_data: {len(kv_cache)}")
 
             # swap in from cpu to gpu
             # print(f"swap_in Consumed: {data} pointer: cpu: {cpu_physical_id} -> gpu:{gpu_physical_id}")
@@ -209,28 +223,37 @@ class CacheEngine:
             print(f"swap_out_consume Consumed: {data}")
             # save the swapped out cache to disk with memoryview
             prefix_token_ids, current_token_ids, cpu_physical_id = data
-            key = str(prefix_token_ids + current_token_ids)
-            import hashlib
-            key = hashlib.md5(key.encode()).hexdigest()
+            key = prefix_token_ids + current_token_ids
+            print(f"Current key: {key}")
+            # import hashlib
+            # key = hashlib.md5(key.encode()).hexdigest()
             print(f"self.num_attention_layers: {self.num_attention_layers}")
+
+            import io
+            buffer = io.BytesIO()
+            temp_cache = []
             import threading
             lock = threading.Lock()
             with lock:
                 for i in range(self.num_attention_layers):
-                    with open(f"/home/lvbo/project/vllm/kvcache_dump/data/cache_{key}_{i}.bin", "wb") as f:
-                        # num_blocks, self.block_size, self.num_kv_heads, self.head_size
-                        # convert data to buffer
-                        import ctypes
-                        import time
-                        start = time.time()
-                        slice = self.gpu_cache[i].cpu()[:, cpu_physical_id, :]
-                        data_ptr = slice.data_ptr()
-                        data_size = slice.numel() * slice.element_size()
-                        buffer = (ctypes.c_char * data_size).from_address(data_ptr)
-                        raw_data = bytes(buffer)
-                        print(f"/home/lvbo/project/vllm/kvcache_dump/data/cache_{key}_{i}.binbuffer max data: {self.cpu_cache[i][:, cpu_physical_id, :].max()} min data: {self.cpu_cache[i][:, cpu_physical_id, :].min()}")
-                        print(f"Time to convert to buffer: {time.time() - start} shape of raw_data: {len(raw_data)}")
-                        f.write(raw_data)
+                    # num_blocks, self.block_size, self.num_kv_heads, self.head_size
+                    # convert data to buffer
+                    import time
+                    start = time.time()
+                    slice = self.gpu_cache[i][:, cpu_physical_id, :]
+                    temp_cache.append(slice)
+                    start = time.time()
+                    print(f"Layer {i}: Saved to buffer, max: {slice.max()}, min: {slice.min()}")
+                    print(f"Time to save layer {i} to buffer: {time.time() - start}")
+
+                torch.save(temp_cache, buffer)
+                print(f"Time to save all layers to buffer: {time.time() - start} shape of raw_data: {len(buffer.getvalue())}")
+
+                from vllm.coordinator_queue import sdk
+                sdk.insert_sync(key, buffer.getvalue())
+                # write twice to check
+                sdk.insert_sync(key, buffer.getvalue())
+
 
     @print_io
     def swap_in(self, src_to_dst: torch.Tensor) -> None:
