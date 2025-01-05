@@ -127,9 +127,9 @@ class CacheEngine:
             print(f"watch_and_swap_in swap_in_consume Consumed: {data}")
             # read the cache from disk
             prefix_token_ids, current_token_ids, gpu_physical_id = data
-            key = str(prefix_token_ids + current_token_ids)
-            import hashlib
-            key = hashlib.md5(key.encode()).hexdigest()
+            key = prefix_token_ids + current_token_ids
+            # import hashlib
+            # key = hashlib.md5(key.encode()).hexdigest()
             print(f"self.num_attention_layers: {self.num_attention_layers}")
             import threading
             lock = threading.Lock()

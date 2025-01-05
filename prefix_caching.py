@@ -120,10 +120,9 @@ for i in range(1):
 
 from vllm.coordinator_queue import is_prefill_process
 
-is_prefill_process = True
-is_prefill_process = False
 import sys
 sys.modules['vllm.coordinator_queue'].is_prefill_process = True
+sys.modules['vllm.coordinator_queue'].datenlord_flag = True
 get_generation_time(
     llm,
     sampling_params,
@@ -148,7 +147,6 @@ del llm
 #     print(len(data))
 #     print(len(data)/1024/1024)
 
-is_prefill_process = False
 import sys
 sys.modules['vllm.coordinator_queue'].is_prefill_process = False
 sys.modules['vllm.coordinator_queue'].datenlord_flag = True

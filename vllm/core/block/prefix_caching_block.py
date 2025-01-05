@@ -234,7 +234,7 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         from vllm.coordinator_queue import datenlord_flag
         if self._device == Device.GPU and datenlord_flag:
             prefix_token_ids, current_token_ids = block.prev_token_ids, block.token_ids
-            key = str(prefix_token_ids + current_token_ids)
+            key = prefix_token_ids + current_token_ids
             # import hashlib
             # key = hashlib.md5(key.encode()).hexdigest()
             print(f"check remote block key: {key}")
