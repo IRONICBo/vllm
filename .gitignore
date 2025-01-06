@@ -203,3 +203,8 @@ benchmarks/*.json
 # Linting
 actionlint
 shellcheck*/
+
+*.txt
+*.bin
+*.pt
+*.txt_bak
