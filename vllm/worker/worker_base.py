@@ -350,33 +350,43 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         if status == "decode" and torch.equal(model_input.input_tokens, torch.tensor([21927], device=self.device)) and model_input.attn_metadata.prefill_metadata is not None:
         # if status == "decode" and self.kv_cache[worker_input.virtual_engine][0].shape[0] == 2:
             print("[datenlord log]: load kvcache")
-            # save kvcache
-            import io
-            load_kv_caches = []
 
-            from kvcache_agent import sdk
-            matched_key, data = sdk.try_load_sync([9707, 21927, 21927, 21927, 21927, 21927, 21927, 21927])
-            kv_cache_block = memoryview(data).tobytes()
-            print(f"[datenlord log]: matched_key: {matched_key} data len: {len(kv_cache_block)}")
-            for i in range(24):
-                buf = io.BytesIO()
-                # cpu size
-                buf.write(kv_cache_block[5276*i:5276*(i+1)])
-                buf.seek(0)
-                kv_cache = torch.load(buf, weights_only=True)
+            from kvcache_agent import swap_in_data_consume
+            while True:
+                start_time = time.time()
+                data = swap_in_data_consume()
+                if data is None:
+                    print("[datenlord log]: swap_in_data_consume Queue is empty!")
+                    break
 
-                # to cuda
-                print(f"[datenlord log]: load kvcache {i} in device {kv_cache.device}")
-                if kv_cache.device != self.device:
-                    kv_cache = kv_cache.cuda()
+                (physical_idx, kv_cache_block) = data
 
-                load_kv_caches.append(kv_cache)
+                # save kvcache
+                import io
+                load_kv_caches = []
+                print(f"[datenlord log]: matched_key idx: {physical_idx} data len: {len(kv_cache_block)}")
+                for i in range(24):
+                    buf = io.BytesIO()
+                    # cpu size
+                    buf.write(kv_cache_block[5276*i:5276*(i+1)])
+                    buf.seek(0)
+                    kv_cache = torch.load(buf, weights_only=True)
 
+                    # to cuda
+                    print(f"[datenlord log]: load kvcache {i} in device {kv_cache.device}")
+                    if kv_cache.device != self.device:
+                        kv_cache = kv_cache.cuda()
 
-            for i in range(24):
-                # kv_cache = torch.load(f"ddd/kvcaches_{i}.pt", weights_only=True)
-                # self.kv_cache[worker_input.virtual_engine][i][:, 0, :] = kv_cache
-                self.kv_cache[worker_input.virtual_engine][i][:, 0, :] = load_kv_caches[i]
+                    load_kv_caches.append(kv_cache)
+
+                for i in range(24):
+                    # kv_cache = torch.load(f"ddd/kvcaches_{i}.pt", weights_only=True)
+                    # self.kv_cache[worker_input.virtual_engine][i][:, 0, :] = kv_cache
+                    self.kv_cache[worker_input.virtual_engine][i][:, physical_idx, :] = load_kv_caches[i]
+
+                end_time = time.time()
+                print(f"[datenlord log]: swap_in_data_consume time: {end_time - start_time}")
+
 
         output = self.model_runner.execute_model(
             model_input=model_input,

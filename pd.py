@@ -31,7 +31,8 @@ llm = LLM(
 
 # max tokens is decode length
 # sampling_params = SamplingParams(temperature=0, max_tokens=10)
-sampling_params = SamplingParams(temperature=0, max_tokens=50, seed=42, top_k=1, top_p=0.001)
+sampling_params = SamplingParams(temperature=0, min_tokens=1800, max_tokens=1800, seed=42, top_k=1, top_p=0.001)
+# sampling_params = SamplingParams(temperature=0, min_tokens=208, max_tokens=208, seed=42, top_k=1, top_p=0.001)
 
 
 # # Querying the age of John Doe
@@ -60,27 +61,34 @@ for i in range(1):
     # prompts.append(f"Hello, Hello, Hello, Hello,{i}")
     # prompts.append(f"Hello, What is your name in model {i}?")
     # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello"*100)
-    prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello")
-    # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello"*100)
+    # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello")
+    prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello"*200)
     # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello")
     # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello")
     # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello")
     # prompts.append(f"Hello,{i}")
 
 
+from datetime import datetime
+now = datetime.now()
+milliseconds = int(now.timestamp() * 1000)
+print(f"[datenlord profiling]: start timestamps {milliseconds} ms")
 get_generation_time(
     llm,
     sampling_params,
     prompts
 )
+now = datetime.now()
+milliseconds = int(now.timestamp() * 1000)
+print(f"[datenlord profiling]: end timestamps {milliseconds} ms")
 
 print("===============================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================================")
 
-get_generation_time(
-    llm,
-    sampling_params,
-    prompts
-)
+# get_generation_time(
+#     llm,
+#     sampling_params,
+#     prompts
+# )
 
 # prompts = []
 # for i in range(1):

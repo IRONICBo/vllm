@@ -1840,6 +1840,11 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             output.hidden_states = hidden_states
 
         print("[datenlord log]: execute_model output: ", output)
+        if prefill_meta is not None and kv_caches[0].shape != torch.Size([0]):
+            from datetime import datetime
+            now = datetime.now()
+            milliseconds = int(now.timestamp() * 1000)
+            print(f"[datenlord profiling]: first token timestamps {milliseconds} ms")
 
         return [output]
 

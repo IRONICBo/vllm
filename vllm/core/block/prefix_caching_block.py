@@ -682,7 +682,9 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         # Check remote
         import os
         status = os.environ.get("DATENLORD_STAGE", "prefill")
-        if status == "decode":
+        # only for first decode process.
+        if status == "decode" and idx == 0:
+        # if status == "decode":
             if len(block_hashes) == 0:
                 # direct return
                 return block_hashes[:idx]
@@ -719,10 +721,13 @@ class PrefixCachingBlockAllocator(BlockAllocator):
 
                         prefix_block_token_ids = total_prefix_token_ids[:i+BLOCK_SIZE]
                         print("[datenlord log]: try to load kvcache from server find_cached_blocks_prefix _block_is_cached check remote block prefix_block_token_ids: ", prefix_block_token_ids)
+                        import time
+                        start_time = time.time()
                         matched_key, data = sdk.try_load_sync(prefix_block_token_ids)
                         kv_cache_block = memoryview(data).tobytes()
                         swap_in_data_produce((tmp_block.block_id, kv_cache_block))
-                        print(f"[datenlord log]: swap_in_data_produce: idx:{tmp_block.block_id}, data len: {len(kv_cache_block)}")
+                        end_time = time.time()
+                        print(f"[datenlord log]: swap_in_data_produce: idx:{tmp_block.block_id}, data len: {len(kv_cache_block)} time cost: {end_time - start_time}")
 
                     # new block cache idx
                     idx = _bisect_left(block_hashes,
