@@ -147,8 +147,8 @@ class ModelConfig:
             HuggingFace config.
         mm_processor_kwargs: Arguments to be forwarded to the model's processor
             for multi-modal data, e.g., image processor.
-        mm_cache_preprocessor: If true, then enables caching of the multi-modal 
-            preprocessor/mapper. Otherwise, the mapper executes each time, and 
+        mm_cache_preprocessor: If true, then enables caching of the multi-modal
+            preprocessor/mapper. Otherwise, the mapper executes each time, and
             for better performance consider enabling frontend process.
         override_neuron_config: Initialize non default neuron config or
             override default neuron config that are specific to Neuron devices,
@@ -848,6 +848,8 @@ class CacheConfig:
         self.sliding_window = sliding_window
         self.enable_prefix_caching = enable_prefix_caching
         self.cpu_offload_gb = cpu_offload_gb
+
+        self.gpu_memory_utilization = 0.3
 
         self._verify_args()
         self._verify_cache_dtype()
@@ -2571,6 +2573,9 @@ class VllmConfig:
     def __post_init__(self):
         """Verify configs are valid & consistent with each other.
         """
+        self.model_config.max_model_len=8
+        self.cache_config.block_size = 8
+
         if self.model_config is not None:
             self.model_config.verify_async_output_proc(self.parallel_config,
                                                        self.speculative_config,

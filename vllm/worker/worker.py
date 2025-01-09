@@ -297,6 +297,8 @@ class Worker(LocalOrDistributedWorkerBase):
             self.cache_engine[ve].gpu_cache
             for ve in range(self.parallel_config.pipeline_parallel_size)
         ]
+        print(f"[datenlord log] self.gpu_cache shape: ", self.gpu_cache[0][0].shape)
+        print(f"[datenlord log] self.gpu_cache size: ", len(self.gpu_cache[0]))
 
     def _warm_up_model(self) -> None:
         if not self.model_config.enforce_eager:

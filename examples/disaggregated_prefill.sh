@@ -27,7 +27,7 @@ if python3 -c "import quart" &> /dev/null; then
 else
     echo "Quart is not installed. Installing..."
     python3 -m pip install quart
-fi 
+fi
 
 # a function that waits vLLM server to start
 wait_for_server() {
@@ -42,7 +42,8 @@ wait_for_server() {
 # You can also adjust --kv-ip and --kv-port for distributed inference.
 
 # prefilling instance, which is the KV producer
-CUDA_VISIBLE_DEVICES=0 vllm serve meta-llama/Meta-Llama-3.1-8B-Instruct \
+CUDA_VISIBLE_DEVICES=0 vllm serve Qwen/Qwen2-0.5B \
+# CUDA_VISIBLE_DEVICES=0 vllm serve meta-llama/Meta-Llama-3.1-8B-Instruct \
     --port 8100 \
     --max-model-len 100 \
     --gpu-memory-utilization 0.8 \
@@ -50,7 +51,8 @@ CUDA_VISIBLE_DEVICES=0 vllm serve meta-llama/Meta-Llama-3.1-8B-Instruct \
     '{"kv_connector":"PyNcclConnector","kv_role":"kv_producer","kv_rank":0,"kv_parallel_size":2}' &
 
 # decoding instance, which is the KV consumer
-CUDA_VISIBLE_DEVICES=1 vllm serve meta-llama/Meta-Llama-3.1-8B-Instruct \
+CUDA_VISIBLE_DEVICES=1 vllm serve Qwen/Qwen2-0.5B \
+# CUDA_VISIBLE_DEVICES=1 vllm serve meta-llama/Meta-Llama-3.1-8B-Instruct \
     --port 8200 \
     --max-model-len 100 \
     --gpu-memory-utilization 0.8 \
@@ -63,11 +65,11 @@ wait_for_server 8200
 
 # launch a proxy server that opens the service at port 8000
 # the workflow of this proxy:
-# - send the request to prefill vLLM instance (port 8100), change max_tokens 
+# - send the request to prefill vLLM instance (port 8100), change max_tokens
 #   to 1
-# - after the prefill vLLM finishes prefill, send the request to decode vLLM 
+# - after the prefill vLLM finishes prefill, send the request to decode vLLM
 #   instance
-# NOTE: the usage of this API is subject to change --- in the future we will 
+# NOTE: the usage of this API is subject to change --- in the future we will
 # introduce "vllm connect" to connect between prefill and decode instances
 python3 ../benchmarks/disagg_benchmarks/disagg_prefill_proxy_server.py &
 sleep 1

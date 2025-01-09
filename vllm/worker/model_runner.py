@@ -1636,6 +1636,8 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         assert model_input.attn_metadata is not None
         prefill_meta = model_input.attn_metadata.prefill_metadata
         decode_meta = model_input.attn_metadata.decode_metadata
+        print("[datenlord log]: prefill_meta", prefill_meta)
+        print("[datenlord log]: decode_meta", decode_meta)
         # TODO(andoorve): We can remove this once all
         # virtual engines share the same kv cache.
         virtual_engine = model_input.virtual_engine
@@ -1676,6 +1678,18 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             model_forward_end = torch.cuda.Event(enable_timing=True)
             model_forward_start.record()
 
+        print("[datenlord log]: model_input", model_input)
+        print("[datenlord log]: intermediate_tensors",
+              intermediate_tensors)
+        print("[datenlord log]: kv_caches", kv_caches)
+
+        # import os
+        # status = os.environ.get("DATENLORD_STAGE", "prefill")
+        # if status == "decode" and torch.equal(model_input.input_tokens, torch.tensor([21927], device=self.device)) and prefill_meta is not None:
+        #     print("[datenlord log]: load kvcache")
+        #     # save kvcache
+        #     kv_caches = torch.load("kvcaches.pt")
+
         if not bypass_model_exec:
             with set_forward_context(model_input.attn_metadata,
                                      self.vllm_config):
@@ -1688,6 +1702,42 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                     **MultiModalKwargs.as_kwargs(multi_modal_kwargs,
                                                  device=self.device),
                     **seqlen_agnostic_kwargs)
+
+                import os
+                status = os.environ.get("DATENLORD_STAGE", "prefill")
+                if status == "prefill" and torch.equal(model_input.input_tokens, torch.tensor([9707, 21927, 21927, 21927, 21927, 21927, 21927, 21927], device=self.device))  and prefill_meta is not None:
+                # if status == "prefill" and torch.equal(model_input.input_tokens, torch.tensor([21927], device=self.device))  and prefill_meta is not None:
+                    print("[datenlord log]: save kvcache")
+                    import io
+                    buf = io.BytesIO()
+                    # save kvcache
+                    for i in range(24):
+                        # torch.save(kv_caches[i][:, 0, :], f"ddd/kvcaches_{i}.pt")
+                        # sharding with 12465308
+                        # torch.save(kv_caches[i][:, 0, :].contiguous(), buf)
+                        print("[datenlord log]: data size", kv_caches[i][:, 0, :].shape)
+                        torch.save(kv_caches[i][:, 0, :].cpu(), buf)
+                        print("[datenlord log]: buf size", buf.tell())
+
+                    # save buf
+                    # with open("ddd/kvcaches.pt", "wb") as f:
+                    #     # contains copy here
+                    #     data = buf.getvalue()
+                    #     print(f"[datenlord log]: ddd/kvcaches.pt data size: {len(data)}")
+                    #     f.write(data)
+
+                    # write to datenlord
+                    kv_cache_block = buf.getvalue()
+                    print("[datenlord log]: kv_cache_block type", type(kv_cache_block), "size", len(kv_cache_block))
+                    from datenlordsdk import DatenLordSDK
+                    sdk = DatenLordSDK(
+                        block_size=len(kv_cache_block),
+                        kv_engine_address=["127.0.0.1:2379"],
+                        log_level="debug"
+                    )
+                    print("SDK initialized successfully")
+                    sdk.insert_sync([9707, 21927, 21927, 21927, 21927, 21927, 21927, 21927], kv_cache_block)
+                    sdk.insert_sync([9707, 21927, 21927, 21927, 21927, 21927, 21927, 21927], kv_cache_block)
 
         if (self.observability_config is not None
                 and self.observability_config.collect_model_forward_time):
@@ -1725,8 +1775,15 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                     torch.tensor(model_forward_time + orig_model_forward_time))
             return hidden_or_intermediate_states
 
+        print("[datenlord log]: hidden_or_intermediate_states: ", hidden_or_intermediate_states)
+        print("[datenlord log]: hidden_or_intermediate_states shape: ", hidden_or_intermediate_states.shape)
+        print("[datenlord log]: kvcache shape: ", kv_caches[0].shape)
+
+
         logits = self.model.compute_logits(hidden_or_intermediate_states,
                                            model_input.sampling_metadata)
+
+        print("[datenlord log]: logits: ", logits)
 
         if not self.is_driver_worker:
             return []
@@ -1771,6 +1828,8 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
 
             output.hidden_states = hidden_states
 
+        print("[datenlord log]: execute_model output: ", output)
+
         return [output]
 
     def need_recv_kv(self, model_input, kv_caches) -> bool:
@@ -1779,7 +1838,7 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             1. current vLLM instance is KV cache consumer/decode vLLM instance
             2. this batch is not a profiling run
             3. this batch is a prefill run
-            
+
         Args:
             model_input: input to the model executable
             kv_caches: vLLM's paged memory
@@ -1804,7 +1863,7 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             1. current vLLM instance is KV cache producer/prefill vLLM instance
             2. this batch is not a profiling run
             3. this batch is a prefill run
-            
+
         Args:
             model_input: input to the model executable
             kv_caches: vLLM's paged memory

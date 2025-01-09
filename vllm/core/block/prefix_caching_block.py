@@ -45,6 +45,8 @@ class BlockTracker:
         self.active = False
         self.reset()
 
+    def __repr__(self):
+        return f"BlockTracker(active={self.active}, last_accessed={self.last_accessed}, computed={self.computed})"
 
 class PrefixCachingBlockAllocator(BlockAllocator):
     """A block allocator that implements prefix caching.
@@ -67,11 +69,13 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         block_size: int,
         block_ids: Optional[Iterable[int]] = None,
         eviction_policy: EvictionPolicy = EvictionPolicy.LRU,
+        device: Optional[Device] = None,
     ):
         if block_ids is None:
             block_ids = range(num_blocks)
 
         self._block_size = block_size
+        self._device = device
 
         # A mapping of prefix hash to block index. All blocks which have a
         # prefix hash will be in this dict, even if they have refcount 0.
@@ -116,6 +120,15 @@ class PrefixCachingBlockAllocator(BlockAllocator):
             refcounter=self._refcounter.as_readonly())
 
         self.metric_data = CacheMetricData()
+
+        # add a test block
+        test_block = self.allocate_immutable_block(prev_block=None, token_ids=[9707, 21927, 21927, 21927, 21927, 21927, 21927, 21927])
+        self._incr_refcount_cached_block(test_block)
+        self._block_tracker[test_block.block_id].computed = True
+        print("[datenlord log]: test_block: ", test_block.__dict__)
+
+        # if not existed, try to init it manually
+        print("[datenlord log]: _cached_blocks: ", self._cached_blocks)
 
     # Implements Block.Factory.
     def _create_block(
@@ -324,10 +337,10 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         return block_id
 
     def _free_block_id(self, block: Block) -> None:
-        """Decrements the refcount of the block. The block may be in two 
-        possible states: (1) immutable/cached or (2) mutable/hashless. 
+        """Decrements the refcount of the block. The block may be in two
+        possible states: (1) immutable/cached or (2) mutable/hashless.
         In the first case, the refcount is decremented directly and the block
-        may be possibly added to the evictor. In other case, hashless 
+        may be possibly added to the evictor. In other case, hashless
         allocator free(..) with keep_block_object=True is called to only free
         the block id (since the block object may be reused by the caller)
         """
@@ -404,7 +417,7 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         given the absolute block id.
 
         Args:
-            absolute_id (int): The absolute block id for the block 
+            absolute_id (int): The absolute block id for the block
                 in whole allocator.
 
         Returns:
@@ -474,7 +487,7 @@ class PrefixCachingBlockAllocator(BlockAllocator):
             block (Block): The block to check for copy-on-write.
 
         Returns:
-            BlockId: The block index of the new block if a copy-on-write 
+            BlockId: The block index of the new block if a copy-on-write
                 operation was performed, or the original block index if
                 no copy-on-write was necessary.
         """
@@ -584,7 +597,7 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         return num_touched_blocks
 
     def swap_out(self, blocks: List[Block]) -> None:
-        """Execute the swap out actions. Basically just free the 
+        """Execute the swap out actions. Basically just free the
         given blocks.
 
         Args:
@@ -594,9 +607,9 @@ class PrefixCachingBlockAllocator(BlockAllocator):
             self._free_block_id(block)
 
     def swap_in(self, blocks: List[Block]) -> None:
-        """Execute the swap in actions. Change the block id from 
-        old allocator to current allocator for each block to finish 
-        the block table update. 
+        """Execute the swap in actions. Change the block id from
+        old allocator to current allocator for each block to finish
+        the block table update.
 
         Args:
             blocks: List of blocks to be swapped in.
@@ -635,7 +648,6 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         Returns:
             List[int]: The prefix of the `block_hashes` that are cached.
         """
-
         def _block_is_cached(block_hash: PrefixHash) -> bool:
             if block_hash not in self._cached_blocks:
                 return False
@@ -658,6 +670,13 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         idx = _bisect_left(block_hashes,
                            True,
                            key=lambda x: not _block_is_cached(x))
+
+        # idx = 1
+        print("[datenlord log]: find_cached_blocks_prefix self._cached_blocks: ", self._cached_blocks)
+        print("[datenlord log]: find_cached_blocks_prefix block_hashes: ", block_hashes)
+        print("[datenlord log]: find_cached_blocks_prefix idx: ", idx)
+        print("[datenlord log]: find_cached_blocks_prefix self._block_tracker: ", self._block_tracker[0])
+
         return block_hashes[:idx]
 
 

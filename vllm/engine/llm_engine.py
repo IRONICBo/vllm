@@ -444,8 +444,12 @@ class LLMEngine:
 
         self.model_executor.initialize_cache(num_gpu_blocks, num_cpu_blocks)
         elapsed = time.time() - start
+        logger.info("num_gpu_blocks=%d, num_cpu_blocks=%d", num_gpu_blocks,
+                    num_cpu_blocks)
         logger.info(("init engine (profile, create kv cache, "
                      "warmup model) took %.2f seconds"), elapsed)
+        print("=============================================================")
+
 
     @classmethod
     def _get_executor_cls(cls,

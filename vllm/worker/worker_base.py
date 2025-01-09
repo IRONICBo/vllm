@@ -340,6 +340,64 @@ class LocalOrDistributedWorkerBase(WorkerBase):
                 orig_model_execute_time = intermediate_tensors.tensors.get(
                     "model_execute_time", torch.tensor(0)).item()
 
+        # update kvcache
+        import os
+        status = os.environ.get("DATENLORD_STAGE", "prefill")
+        # batch
+        # if status == "decode" and torch.equal(model_input.input_tokens, torch.tensor([21927, 21927, 21927], device=self.device)) and model_input.attn_metadata.prefill_metadata is not None:
+
+        # one seq
+        if status == "decode" and torch.equal(model_input.input_tokens, torch.tensor([21927], device=self.device)) and model_input.attn_metadata.prefill_metadata is not None:
+        # if status == "decode" and self.kv_cache[worker_input.virtual_engine][0].shape[0] == 2:
+            print("[datenlord log]: load kvcache")
+            # save kvcache
+            import io
+            load_kv_caches = []
+            # with open("ddd/kvcaches.pt", "rb") as f:
+            #     for i in range(24):
+            #         buf = io.BytesIO()
+            #         # cpu size
+            #         buf.write(f.read(5276))
+            #         buf.seek(0)
+            #         kv_cache = torch.load(buf, weights_only=True)
+
+            #         # to cuda
+            #         print(f"[datenlord log]: load kvcache {i} in device {kv_cache.device}")
+            #         if kv_cache.device != self.device:
+            #             kv_cache = kv_cache.cuda()
+
+            #         load_kv_caches.append(kv_cache)
+
+            from datenlordsdk import DatenLordSDK
+            sdk = DatenLordSDK(
+                block_size=126624,
+                kv_engine_address=["127.0.0.1:2379"],
+                log_level="debug"
+            )
+            print("[datenlord log]: SDK initialized successfully")
+            matched_key, data = sdk.try_load_sync([9707, 21927, 21927, 21927, 21927, 21927, 21927, 21927])
+            kv_cache_block = memoryview(data).tobytes()
+            print(f"[datenlord log]: matched_key: {matched_key} data len: {len(kv_cache_block)}")
+            for i in range(24):
+                buf = io.BytesIO()
+                # cpu size
+                buf.write(kv_cache_block[5276*i:5276*(i+1)])
+                buf.seek(0)
+                kv_cache = torch.load(buf, weights_only=True)
+
+                # to cuda
+                print(f"[datenlord log]: load kvcache {i} in device {kv_cache.device}")
+                if kv_cache.device != self.device:
+                    kv_cache = kv_cache.cuda()
+
+                load_kv_caches.append(kv_cache)
+
+
+            for i in range(24):
+                # kv_cache = torch.load(f"ddd/kvcaches_{i}.pt", weights_only=True)
+                # self.kv_cache[worker_input.virtual_engine][i][:, 0, :] = kv_cache
+                self.kv_cache[worker_input.virtual_engine][i][:, 0, :] = load_kv_caches[i]
+
         output = self.model_runner.execute_model(
             model_input=model_input,
             kv_caches=self.kv_cache[worker_input.virtual_engine]
@@ -348,6 +406,27 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             num_steps=num_steps,
             **kwargs,
         )
+
+        # Compare the kv_cache with the original kv_cache
+        # batch
+        if status == "decode" and torch.equal(model_input.input_tokens, torch.tensor([21927, 21927, 21927], device=self.device)) and model_input.attn_metadata.prefill_metadata is not None:
+
+        # one seq
+        # if status == "decode" and torch.equal(model_input.input_tokens, torch.tensor([21927], device=self.device)) and model_input.attn_metadata.prefill_metadata is not None:
+        # if status == "decode" and self.kv_cache[worker_input.virtual_engine][0].shape[0] == 2:
+            print("[datenlord log]: compare kvcache")
+            tmp_kv_cache = self.kv_cache[worker_input.virtual_engine]
+            for i in range(len(tmp_kv_cache)):
+                kv_cache = torch.load(f"ddd/kvcaches_{i}.pt", weights_only=True)
+                if not torch.equal(tmp_kv_cache[i][:, 0, :], kv_cache):
+                    print(f"[datenlord log]: kvcache {i} is different")
+                    # diff
+                    diff = tmp_kv_cache[i][:, 0, :] - kv_cache
+                    print(f"[datenlord log]: diff {i}: {diff}")
+                    print(f"[datenlord log]: diff {i}: {diff.max()}")
+                    # print(f"[datenlord log]: tmp_kv_cache {i} {j}: {tmp_kv_cache[i][j]}")
+                    # print(f"[datenlord log]: kv_caches {i} {j}: {kv_caches[i][j]}")
+            print("[datenlord log]: compare kvcache done")
 
         model_execute_time = time.perf_counter() - start_time
         if not get_pp_group().is_last_rank:
@@ -475,7 +554,7 @@ def extract_previous_hidden_states(
         data: Union[ExecuteModelRequest, Dict[str, torch.Tensor]]) -> \
             Dict[str, torch.Tensor]:
     """If data contains previous_hidden_states, extract it. This returns a dict
-    which can be used directly as additional kwargs in any following 
+    which can be used directly as additional kwargs in any following
     execute_model calls. This is used in draft models like EAGLE."""
     output = {}
 
