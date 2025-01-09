@@ -353,28 +353,8 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             # save kvcache
             import io
             load_kv_caches = []
-            # with open("ddd/kvcaches.pt", "rb") as f:
-            #     for i in range(24):
-            #         buf = io.BytesIO()
-            #         # cpu size
-            #         buf.write(f.read(5276))
-            #         buf.seek(0)
-            #         kv_cache = torch.load(buf, weights_only=True)
 
-            #         # to cuda
-            #         print(f"[datenlord log]: load kvcache {i} in device {kv_cache.device}")
-            #         if kv_cache.device != self.device:
-            #             kv_cache = kv_cache.cuda()
-
-            #         load_kv_caches.append(kv_cache)
-
-            from datenlordsdk import DatenLordSDK
-            sdk = DatenLordSDK(
-                block_size=126624,
-                kv_engine_address=["127.0.0.1:2379"],
-                log_level="debug"
-            )
-            print("[datenlord log]: SDK initialized successfully")
+            from kvcache_agent import sdk
             matched_key, data = sdk.try_load_sync([9707, 21927, 21927, 21927, 21927, 21927, 21927, 21927])
             kv_cache_block = memoryview(data).tobytes()
             print(f"[datenlord log]: matched_key: {matched_key} data len: {len(kv_cache_block)}")

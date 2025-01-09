@@ -1681,7 +1681,7 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         print("[datenlord log]: model_input", model_input)
         print("[datenlord log]: intermediate_tensors",
               intermediate_tensors)
-        print("[datenlord log]: kv_caches", kv_caches)
+        # print("[datenlord log]: kv_caches", kv_caches)
 
         # import os
         # status = os.environ.get("DATENLORD_STAGE", "prefill")
@@ -1705,39 +1705,50 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
 
                 import os
                 status = os.environ.get("DATENLORD_STAGE", "prefill")
-                if status == "prefill" and torch.equal(model_input.input_tokens, torch.tensor([9707, 21927, 21927, 21927, 21927, 21927, 21927, 21927], device=self.device))  and prefill_meta is not None:
-                # if status == "prefill" and torch.equal(model_input.input_tokens, torch.tensor([21927], device=self.device))  and prefill_meta is not None:
-                    print("[datenlord log]: save kvcache")
-                    import io
-                    buf = io.BytesIO()
-                    # save kvcache
-                    for i in range(24):
-                        # torch.save(kv_caches[i][:, 0, :], f"ddd/kvcaches_{i}.pt")
-                        # sharding with 12465308
-                        # torch.save(kv_caches[i][:, 0, :].contiguous(), buf)
-                        print("[datenlord log]: data size", kv_caches[i][:, 0, :].shape)
-                        torch.save(kv_caches[i][:, 0, :].cpu(), buf)
-                        print("[datenlord log]: buf size", buf.tell())
+                # Save kvcache to datenlord if it is not profiling stage
+                # Do not cached here in prefill
+                if status == "prefill" and prefill_meta is not None and kv_caches[0].shape != torch.Size([0]) and model_input.input_positions[0] == 0:
+                    start_time = time.time()
+                    print("[datenlord log]: save kvcache to datenlord with all tokens", model_input.input_tokens)
 
-                    # save buf
-                    # with open("ddd/kvcaches.pt", "wb") as f:
-                    #     # contains copy here
-                    #     data = buf.getvalue()
-                    #     print(f"[datenlord log]: ddd/kvcaches.pt data size: {len(data)}")
-                    #     f.write(data)
+                    BLOCK_SIZE = 8
+                    BLOCK_TABLE_SEQ_ID = 0
+                    kv_cache_idx = 0
+                    # Split input tokens with block size
+                    for input_idx in range(model_input.input_tokens.shape[0] // BLOCK_SIZE):
+                        get_kv_cache_time = time.time()
 
-                    # write to datenlord
-                    kv_cache_block = buf.getvalue()
-                    print("[datenlord log]: kv_cache_block type", type(kv_cache_block), "size", len(kv_cache_block))
-                    from datenlordsdk import DatenLordSDK
-                    sdk = DatenLordSDK(
-                        block_size=len(kv_cache_block),
-                        kv_engine_address=["127.0.0.1:2379"],
-                        log_level="debug"
-                    )
-                    print("SDK initialized successfully")
-                    sdk.insert_sync([9707, 21927, 21927, 21927, 21927, 21927, 21927, 21927], kv_cache_block)
-                    sdk.insert_sync([9707, 21927, 21927, 21927, 21927, 21927, 21927, 21927], kv_cache_block)
+                        # Get current prefix
+                        prefix = model_input.input_tokens[:(input_idx+1)*BLOCK_SIZE].tolist()
+                        print("[datenlord log]: save kvcache to datenlord with prefix", prefix)
+
+                        # kvcache index from model input block table
+                        # prefill_meta => XFormersMetadata
+                        kv_cache_idx = prefill_meta.block_tables[BLOCK_TABLE_SEQ_ID][input_idx]
+                        print("[datenlord log]: save kvcache to datenlord with kv_cache_idx", kv_cache_idx)
+
+                        import io
+                        buf = io.BytesIO()
+                        # save kvcache
+                        for i in range(24):
+                            torch.save(kv_caches[i][:, kv_cache_idx, :].cpu(), buf)
+                            print("[datenlord log]: save kvcache and current buf size", buf.tell())
+
+                        # write to datenlord
+                        kv_cache_block = buf.getvalue()
+                        print("[datenlord log]: kv_cache_block type", type(kv_cache_block), "size", len(kv_cache_block))
+
+                        get_kv_cache_time_done = time.time()
+                        print("[datenlord log]: get kvcache time", get_kv_cache_time_done-get_kv_cache_time)
+
+                        from kvcache_agent import sdk
+                        sdk.insert_sync(prefix, kv_cache_block)
+                        end_time = time.time()
+                        print("[datenlord log]: save kvcache to datenlord time", end_time-start_time)
+
+                        # For flush
+                        sdk.insert_sync(prefix, kv_cache_block)
+                        print("[datenlord log]: save kvcache to datenlord done")
 
         if (self.observability_config is not None
                 and self.observability_config.collect_model_forward_time):
@@ -1775,7 +1786,7 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                     torch.tensor(model_forward_time + orig_model_forward_time))
             return hidden_or_intermediate_states
 
-        print("[datenlord log]: hidden_or_intermediate_states: ", hidden_or_intermediate_states)
+        # print("[datenlord log]: hidden_or_intermediate_states: ", hidden_or_intermediate_states)
         print("[datenlord log]: hidden_or_intermediate_states shape: ", hidden_or_intermediate_states.shape)
         print("[datenlord log]: kvcache shape: ", kv_caches[0].shape)
 

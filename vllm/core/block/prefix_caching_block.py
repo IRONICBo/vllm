@@ -122,10 +122,10 @@ class PrefixCachingBlockAllocator(BlockAllocator):
         self.metric_data = CacheMetricData()
 
         # add a test block
-        test_block = self.allocate_immutable_block(prev_block=None, token_ids=[9707, 21927, 21927, 21927, 21927, 21927, 21927, 21927])
-        self._incr_refcount_cached_block(test_block)
-        self._block_tracker[test_block.block_id].computed = True
-        print("[datenlord log]: test_block: ", test_block.__dict__)
+        # test_block = self.allocate_immutable_block(prev_block=None, token_ids=[9707, 21927, 21927, 21927, 21927, 21927, 21927, 21927])
+        # self._incr_refcount_cached_block(test_block)
+        # self._block_tracker[test_block.block_id].computed = True
+        # print("[datenlord log]: test_block: ", test_block.__dict__)
 
         # if not existed, try to init it manually
         print("[datenlord log]: _cached_blocks: ", self._cached_blocks)
@@ -667,15 +667,69 @@ class PrefixCachingBlockAllocator(BlockAllocator):
 
         # Look for the first block that's not cached, and returns the prefix
         # i.e. blocks that are cached.
+
+        # Local cache idx
         idx = _bisect_left(block_hashes,
                            True,
                            key=lambda x: not _block_is_cached(x))
 
-        # idx = 1
         print("[datenlord log]: find_cached_blocks_prefix self._cached_blocks: ", self._cached_blocks)
         print("[datenlord log]: find_cached_blocks_prefix block_hashes: ", block_hashes)
         print("[datenlord log]: find_cached_blocks_prefix idx: ", idx)
         print("[datenlord log]: find_cached_blocks_prefix self._block_tracker: ", self._block_tracker[0])
+
+        # Remote cache idx
+        # Check remote
+        import os
+        status = os.environ.get("DATENLORD_STAGE", "prefill")
+        if status == "decode":
+            if len(block_hashes) == 0:
+                # direct return
+                return block_hashes[:idx]
+
+            longest_block_hash = block_hashes[-1]
+            from kvcache_agent import get_global_prefix_hash_to_prefix_token_ids
+            total_prefix_token_ids = get_global_prefix_hash_to_prefix_token_ids(longest_block_hash)
+            print(f"[datenlord log]: device:{self._device} find_cached_blocks_prefix _block_is_cached find block_hash: {longest_block_hash}, prefix_token_ids: {total_prefix_token_ids}")
+            if total_prefix_token_ids is not None and self._device == Device.GPU:
+                key = total_prefix_token_ids
+                print(f"[datenlord log]: find_cached_blocks_prefix _block_is_cached check remote block key: {key} raw key: {total_prefix_token_ids}")
+                # check file exist or not
+                # current metadata and data is not atomic, need to check later
+                from kvcache_agent import sdk
+                matched_key = sdk.match_prefix_sync(key)
+                if matched_key is not None:
+                    print(f"[datenlord log]: find_cached_blocks_prefix _block_is_cached check remote block hit key {matched_key} exists")
+                    # try to set true and load data from prefix caching
+                    # matched key is block level, so we can convert it to block hashes data
+
+                    # Direct create new blocks here
+                    BLOCK_SIZE = 8
+                    prev_block = None
+                    from kvcache_agent import swap_in_data_produce
+                    for i in range(0, len(total_prefix_token_ids), BLOCK_SIZE):
+                        block_token_ids = total_prefix_token_ids[i:i+BLOCK_SIZE]
+                        print(f"[datenlord log]: find_cached_blocks_prefix _block_is_cached check remote block token_ids: {block_token_ids}")
+                        tmp_block = self.allocate_immutable_block(prev_block=prev_block, token_ids=block_token_ids)
+                        self._incr_refcount_cached_block(tmp_block)
+                        self._block_tracker[tmp_block.block_id].computed = True
+                        print("[datenlord log]: created tmp_block: ", tmp_block.__dict__)
+                        prev_block = tmp_block
+                        print("[datenlord log]: _cached_blocks: ", self._cached_blocks)
+
+                        prefix_block_token_ids = total_prefix_token_ids[:i+BLOCK_SIZE]
+                        print("[datenlord log]: try to load kvcache from server find_cached_blocks_prefix _block_is_cached check remote block prefix_block_token_ids: ", prefix_block_token_ids)
+                        matched_key, data = sdk.try_load_sync(prefix_block_token_ids)
+                        kv_cache_block = memoryview(data).tobytes()
+                        swap_in_data_produce((tmp_block.block_id, kv_cache_block))
+                        print(f"[datenlord log]: swap_in_data_produce: idx:{tmp_block.block_id}, data len: {len(kv_cache_block)}")
+
+                    # new block cache idx
+                    idx = _bisect_left(block_hashes,
+                                    True,
+                                    key=lambda x: not _block_is_cached(x))
+                    return block_hashes[:idx]
+
 
         return block_hashes[:idx]
 
@@ -963,6 +1017,11 @@ class ComputedBlocksTracker:
             )
             block_hashes_recorded.append(block_hash)
             prev_block_hash = block_hash
+
+            from kvcache_agent import put_global_prefix_hash_to_prefix_token_ids
+            current_all_block_tokens = token_ids[:(i + 1) * self._block_size]
+            put_global_prefix_hash_to_prefix_token_ids(block_hash, current_all_block_tokens)
+            print(f"[datenlord log]: ComputedBlocksTracker _update_seq_hashes block_hash: {block_hash}, current_all_block_tokens: {current_all_block_tokens}")
 
         self._seq_id_to_blocks_hashes[seq.seq_id] = block_hashes_recorded
 

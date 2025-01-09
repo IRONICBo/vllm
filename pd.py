@@ -31,7 +31,7 @@ llm = LLM(
 
 # max tokens is decode length
 # sampling_params = SamplingParams(temperature=0, max_tokens=10)
-sampling_params = SamplingParams(temperature=0, max_tokens=12, seed=42, top_k=1, top_p=0.001)
+sampling_params = SamplingParams(temperature=0, max_tokens=50, seed=42, top_k=1, top_p=0.001)
 
 
 # # Querying the age of John Doe
@@ -59,7 +59,9 @@ prompts = []
 for i in range(1):
     # prompts.append(f"Hello, Hello, Hello, Hello,{i}")
     # prompts.append(f"Hello, What is your name in model {i}?")
+    # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello"*100)
     prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello")
+    # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello"*100)
     # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello")
     # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello")
     # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello")
@@ -80,11 +82,11 @@ get_generation_time(
     prompts
 )
 
-prompts = []
-for i in range(1):
+# prompts = []
+# for i in range(1):
     # prompts.append(f"Hello, Hello, Hello, Hello,{i}")
     # prompts.append(f"Hello, What is your name in model {i}?")
-    prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello")
+    # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello")
     # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello You You")
     # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello")
     # prompts.append(f"Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello")
