@@ -1064,7 +1064,9 @@ class LLM:
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
         priority: int = 0,
     ) -> None:
-        request_id = str(next(self.request_counter))
+        # request_id = str(next(self.request_counter))
+        import uuid
+        request_id = uuid.uuid4().hex
         self.llm_engine.add_request(
             request_id,
             prompt,
@@ -1138,4 +1140,6 @@ class LLM:
         # Sort the outputs by request ID.
         # This is necessary because some requests may be finished earlier than
         # its previous requests.
-        return sorted(outputs, key=lambda x: int(x.request_id))
+        # return sorted(outputs, key=lambda x: int(x.request_id))
+        # Disable request ID sorting for uuid request IDs
+        return outputs

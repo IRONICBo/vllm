@@ -1355,6 +1355,8 @@ class LLMEngine:
              allow_async_output_proc
              ) = self.scheduler[virtual_engine].schedule()
 
+            print("scheduler_outputs", scheduler_outputs)
+
             ctx.seq_group_metadata_list = seq_group_metadata_list
             ctx.scheduler_outputs = scheduler_outputs
 
