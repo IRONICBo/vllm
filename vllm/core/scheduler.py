@@ -532,7 +532,7 @@ class Scheduler:
                 chunked number of tokens are scheduled  if
                 `budget.num_batched_tokens` has not enough capacity to schedule
                 all tokens.
-    
+
         Returns:
             SchedulerRunningOutputs.
         """
@@ -1045,7 +1045,7 @@ class Scheduler:
 
     def _schedule_default(self) -> SchedulerOutputs:
         """Schedule queued requests.
-        
+
         The current policy is designed to optimize the throughput. First,
         it batches as many prefill requests as possible. And it schedules
         decodes. If there's a pressure on GPU memory, decode requests can
@@ -1150,7 +1150,7 @@ class Scheduler:
 
     def _schedule_chunked_prefill(self) -> SchedulerOutputs:
         """Schedule queued requests.
-        
+
         Chunked prefill allows to chunk prefill requests, batch them together
         with decode requests. This policy 1. schedule as many decoding requests
         as possible. 2. schedule chunked prefill requests that are not
@@ -1465,6 +1465,9 @@ class Scheduler:
         self._free_finished_seqs(seq_group)
 
     def free_finished_seq_groups(self) -> None:
+        print("Freeing finished seq groups, self.running:", self.running)
+        print("Freeing finished seq groups, self.waiting:", self.waiting)
+        print("Freeing finished seq groups, self.swapped:", self.swapped)
         remaining: Deque[SequenceGroup] = deque()
         for seq_group in self.running:
             self._free_finished_seq_group(seq_group)
