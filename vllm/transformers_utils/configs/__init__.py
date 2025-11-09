@@ -14,6 +14,7 @@ from vllm.transformers_utils.configs.eagle import EAGLEConfig
 # tiiuae/falcon-7b(-instruct) models. Newer Falcon models will use the
 # `FalconConfig` class from the official HuggingFace transformers library.
 from vllm.transformers_utils.configs.falcon import RWConfig
+from vllm.transformers_utils.configs.fireredasr import FireRedASRConfig
 from vllm.transformers_utils.configs.jais import JAISConfig
 from vllm.transformers_utils.configs.kimi_vl import KimiVLConfig
 from vllm.transformers_utils.configs.medusa import MedusaConfig
@@ -36,6 +37,7 @@ __all__ = [
     "DeepseekVLV2Config",
     "EAGLEConfig",
     "RWConfig",
+    "FireRedASRConfig",
     "JAISConfig",
     "MedusaConfig",
     "MiDashengLMConfig",

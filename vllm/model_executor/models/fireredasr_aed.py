@@ -8,7 +8,7 @@ from typing import Annotated, Literal, Optional, Union, cast
 import numpy as np
 import torch
 from torch import nn
-from transformers import (BatchFeature, PretrainedConfig)
+from transformers import BatchFeature
 
 from vllm.attention import Attention, AttentionType
 from vllm.attention.layer import MultiHeadAttention
@@ -41,6 +41,8 @@ from vllm.multimodal.profiling import BaseDummyInputsBuilder
 from vllm.transformers_utils.processor import cached_get_processor
 from vllm.utils.tensor_schema import TensorSchema, TensorShape
 
+from vllm.transformers_utils.configs.fireredasr import FireRedASRConfig
+
 from .interfaces import (MultiModalEmbeddings, SupportsMultiModal,
                          SupportsTranscription)
 from .utils import (AutoWeightsLoader, WeightsMapper, cast_overflow_tensors,
@@ -64,45 +66,6 @@ class FireRedASRAudioInputs(TensorSchema):
     """
     input_features: Annotated[Optional[NestedTensors],
                               TensorShape("b", "t", "f")]
-
-
-class FireRedASRConfig(PretrainedConfig):
-    """Configuration for FireRedASR model."""
-    model_type = "fireredasr_aed"
-    
-    def __init__(
-        self,
-        vocab_size: int = 8000,
-        d_model: int = 512,
-        n_layers_enc: int = 12,
-        n_layers_dec: int = 6,
-        n_head: int = 8,
-        kernel_size: int = 31,
-        dropout_rate: float = 0.1,
-        residual_dropout: float = 0.1,
-        pe_maxlen: int = 5000,
-        idim: int = 80,  # input feature dimension
-        odim: int = 8000,  # output vocabulary size
-        sos_id: int = 1,
-        eos_id: int = 2,
-        pad_id: int = 0,
-        **kwargs
-    ):
-        super().__init__(**kwargs)
-        self.vocab_size = vocab_size
-        self.d_model = d_model
-        self.n_layers_enc = n_layers_enc
-        self.n_layers_dec = n_layers_dec
-        self.n_head = n_head
-        self.kernel_size = kernel_size
-        self.dropout_rate = dropout_rate
-        self.residual_dropout = residual_dropout
-        self.pe_maxlen = pe_maxlen
-        self.idim = idim
-        self.odim = odim
-        self.sos_id = sos_id
-        self.eos_id = eos_id
-        self.pad_id = pad_id
 
 
 class FireRedASRPositionalEncoding(nn.Module):
@@ -252,9 +215,155 @@ class FireRedASRFeedForward(nn.Module):
         return x
 
 
+class FireRedASRConformerBlock(nn.Module):
+    """Conformer block combining self-attention, convolution, and feed-forward."""
+
+    def __init__(
+        self,
+        d_model: int,
+        n_head: int,
+        d_ff: int,
+        kernel_size: int,
+        dropout: float = 0.1,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ):
+        super().__init__()
+        self.d_model = d_model
+
+        # Feed-forward module 1 (half-step)
+        self.ffn1 = FireRedASRFeedForward(
+            d_model, d_ff, dropout, "swish",
+            quant_config=quant_config, prefix=f"{prefix}.ffn1"
+        )
+
+        # Multi-head self-attention
+        self.self_attn = FireRedASRAttention(
+            d_model, n_head, dropout, AttentionType.ENCODER,
+            quant_config=quant_config, prefix=f"{prefix}.self_attn"
+        )
+
+        # Convolution module
+        self.conv = FireRedASRConvModule(
+            d_model, kernel_size, dropout,
+            quant_config=quant_config, prefix=f"{prefix}.conv"
+        )
+
+        # Feed-forward module 2 (half-step)
+        self.ffn2 = FireRedASRFeedForward(
+            d_model, d_ff, dropout, "swish",
+            quant_config=quant_config, prefix=f"{prefix}.ffn2"
+        )
+
+        self.norm_ffn1 = nn.LayerNorm(d_model)
+        self.norm_attn = nn.LayerNorm(d_model)
+        self.norm_conv = nn.LayerNorm(d_model)
+        self.norm_ffn2 = nn.LayerNorm(d_model)
+        self.norm_final = nn.LayerNorm(d_model)
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        attn_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        # Feed-forward module 1 (half-step residual)
+        residual = x
+        x = self.norm_ffn1(x)
+        x = residual + 0.5 * self.dropout(self.ffn1(x))
+
+        # Multi-head self-attention
+        residual = x
+        x = self.norm_attn(x)
+        x = residual + self.dropout(self.self_attn(x, attn_mask=attn_mask))
+
+        # Convolution module
+        residual = x
+        x = self.norm_conv(x)
+        x = residual + self.dropout(self.conv(x))
+
+        # Feed-forward module 2 (half-step residual)
+        residual = x
+        x = self.norm_ffn2(x)
+        x = residual + 0.5 * self.dropout(self.ffn2(x))
+
+        # Final layer norm
+        x = self.norm_final(x)
+
+        return x
+
+
+class FireRedASRConvModule(nn.Module):
+    """Convolution module for Conformer block."""
+
+    def __init__(
+        self,
+        d_model: int,
+        kernel_size: int,
+        dropout: float = 0.1,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ):
+        super().__init__()
+
+        # Pointwise expansion
+        self.pointwise_conv1 = ColumnParallelLinear(
+            d_model, d_model * 2,
+            bias=True, quant_config=quant_config,
+            prefix=f"{prefix}.pointwise_conv1"
+        )
+
+        # GLU activation
+        self.glu = nn.GLU(dim=-1)
+
+        # Depthwise convolution
+        padding = (kernel_size - 1) // 2
+        self.depthwise_conv = nn.Conv1d(
+            d_model, d_model,
+            kernel_size=kernel_size,
+            padding=padding,
+            groups=d_model,  # Depthwise
+        )
+
+        self.batch_norm = nn.BatchNorm1d(d_model)
+        self.activation = get_act_fn("swish")
+
+        # Pointwise compression
+        self.pointwise_conv2 = RowParallelLinear(
+            d_model, d_model,
+            bias=True, quant_config=quant_config,
+            prefix=f"{prefix}.pointwise_conv2"
+        )
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Pointwise expansion
+        x, _ = self.pointwise_conv1(x)
+
+        # GLU activation
+        x = self.glu(x)
+
+        # Depthwise convolution
+        # x shape: (batch, seq_len, channels) -> (batch, channels, seq_len)
+        x = x.transpose(1, 2)
+        x = self.depthwise_conv(x)
+        x = self.batch_norm(x)
+        x = x.transpose(1, 2)  # Back to (batch, seq_len, channels)
+
+        x = self.activation(x)
+
+        # Pointwise compression
+        x, _ = self.pointwise_conv2(x)
+        x = self.dropout(x)
+
+        return x
+
+
 class FireRedASRConformerEncoder(nn.Module):
     """Conformer encoder for FireRedASR."""
-    
+
     def __init__(
         self,
         idim: int,
@@ -270,17 +379,17 @@ class FireRedASRConformerEncoder(nn.Module):
     ):
         super().__init__()
         self.d_model = d_model
-        
+
         # Input projection
         self.input_proj = ColumnParallelLinear(
             idim, d_model,
             bias=True, quant_config=quant_config,
             prefix=f"{prefix}.input_proj"
         )
-        
+
         # Positional encoding
         self.pos_enc = FireRedASRPositionalEncoding(d_model, pe_maxlen)
-        
+
         # Conformer blocks
         self.layers = nn.ModuleList([
             FireRedASRConformerBlock(
@@ -289,7 +398,7 @@ class FireRedASRConformerEncoder(nn.Module):
                 prefix=f"{prefix}.layers.{i}"
             ) for i in range(n_layers)
         ])
-        
+
         self.norm = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
         

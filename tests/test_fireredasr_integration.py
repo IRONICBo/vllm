@@ -11,8 +11,8 @@ import pytest
 from unittest.mock import Mock, patch
 
 from vllm.config import VllmConfig, ModelConfig, CacheConfig
+from vllm.transformers_utils.configs.fireredasr import FireRedASRConfig
 from vllm.model_executor.models.fireredasr_aed import (
-    FireRedASRConfig,
     FireRedASRForConditionalGeneration,
     FireRedASRConformerEncoder,
     FireRedASRTransformerDecoder,
